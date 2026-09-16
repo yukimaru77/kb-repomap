@@ -344,7 +344,7 @@ def main():
     parser.add_argument("--model", default=kb_api.DEFAULT_MODEL)
     parser.add_argument("--effort", choices=("none", "minimal", "low", "medium", "high", "xhigh"),
                         default=kb_api.DEFAULT_EFFORT)
-    parser.add_argument("--workers", type=int, default=10)
+    parser.add_argument("--workers", type=int, default=12)
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--limit", type=int, help="process at most N pending packs")
     args = parser.parse_args()

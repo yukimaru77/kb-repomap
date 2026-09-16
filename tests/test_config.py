@@ -20,7 +20,7 @@ class ConfigTest(unittest.TestCase):
         self.assertFalse(config["two_stage_enabled"])
         self.assertEqual(config["second_stage_mode"], "tokens")
         self.assertEqual(config["second_stage_budget_tokens"], 150000)
-        self.assertEqual(config["workers"], 10)
+        self.assertEqual(config["workers"], 12)
         self.assertEqual(config["map_tokens"], 10000)
 
     def test_omitted_two_stage_config_is_disabled(self):

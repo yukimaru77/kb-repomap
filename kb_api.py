@@ -10,7 +10,7 @@ from http.client import IncompleteRead
 COMPACTION_TYPES = {"compaction", "compaction_summary", "context_compaction"}
 DEFAULT_MODEL = "gpt-5.6-sol"
 DEFAULT_EFFORT = "high"
-DEFAULT_COMPACT_WORKERS = 10
+DEFAULT_COMPACT_WORKERS = 12
 COMPACT_MAX_ATTEMPTS = 6
 COMPACT_RETRY_MAX_DELAY = 30
 COMPACT_RETRYABLE_HTTP_CODES = {408, 409, 429, 500, 502, 503, 504}

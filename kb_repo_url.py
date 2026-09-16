@@ -168,7 +168,7 @@ def load_config(path):
         ),
         "model": data.get("model", kb_api.DEFAULT_MODEL),
         "effort": data.get("effort", kb_api.DEFAULT_EFFORT),
-        "workers": data.get("workers", 10),
+        "workers": data.get("workers", 12),
         "max_file_bytes": data.get("max_file_bytes", 600_000),
         "thin_blob_threshold": data.get("thin_blob_threshold", 2_000),
         "map_tokens": data.get("map_tokens", 10_000),
