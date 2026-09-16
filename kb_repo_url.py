@@ -207,6 +207,8 @@ def main():
     parser.add_argument("--ref", help="branch, tag, or commit to check out")
     parser.add_argument("--workspace", default=str(Path(kb_api.STATE_ROOT) / "repos"))
     parser.add_argument("--repo-map", dest="repo_map", help="use an existing repository map")
+    parser.add_argument("--reading-instructions-file", help="UTF-8 file replacing each pack's reading instructions")
+    parser.add_argument("--instructions-file", help="UTF-8 file replacing first/second-stage compaction API instructions")
     parser.add_argument("--map-tokens", type=int, help="repository map token budget (default: 10000)")
     parser.add_argument("--origin", help="pool origin, without /v1; or KB_POOL_ORIGIN")
     parser.add_argument("--key-file", help="pool client key file; or KB_POOL_KEY_FILE")
@@ -311,6 +313,10 @@ def main():
     ]
     for prelude in args.prelude_file:
         command += ["--prelude-file", str(Path(prelude).expanduser().resolve())]
+    for option, value in (("--reading-instructions-file", args.reading_instructions_file),
+                          ("--instructions-file", args.instructions_file)):
+        if value is not None:
+            command += [option, str(Path(value).expanduser().resolve())]
     if args.dry_run:
         command.append("--dry-run")
     run(command)

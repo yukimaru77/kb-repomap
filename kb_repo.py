@@ -31,9 +31,8 @@ STATIC_ASSET_PARTS = {"assets", "static"}
 LARGE_STRUCTURED_BYTES = 200_000
 LARGE_AUXILIARY_BYTES = 100_000
 
-READ_INSTRUCTION = """以下のファイルをすべて全文読んでよく咀嚼し、以後の実装・調査・レビューで使える知識として保持してください。
-単独ファイルとして局所的に要約せず、冒頭のリポジトリの構造マップと、同じblob内のファイル同士の関係、公開インターフェース、データフロー、制約、重要な識別子とパスを結び付けて理解してください。
-構造マップと実装が矛盾する場合は実装を正とし、その差異も保持してください。推測を事実として扱わないでください。"""
+READ_INSTRUCTION = """以下のファイルをすべて全文読んでよく咀嚼し、以後、これらのファイルに対する様々な作業や質問、検索で使える知識として保持してください。
+構造マップはあくまで静的解析に基づく構造情報です。実装と矛盾する場合は実装を正とし、推測を事実として扱わないでください。"""
 
 
 def git(repo, *args):
@@ -179,7 +178,7 @@ def pack_units(units, block_tokens, capacity):
     return packs
 
 
-def blob_source(repo_map, paths, contents):
+def blob_source(repo_map, paths, contents, reading_instructions=READ_INSTRUCTION):
     manifest = "\n".join(f"- {p.as_posix()}" for p in paths)
     bodies = "\n\n".join(file_block(p.as_posix(), contents[p]) for p in paths)
     return f"""===== REPOSITORY MAP =====
@@ -190,7 +189,7 @@ def blob_source(repo_map, paths, contents):
 
 ===== READING INSTRUCTIONS =====
 
-{READ_INSTRUCTION}
+{reading_instructions}
 
 このblobに含まれるファイル:
 {manifest}
@@ -201,21 +200,21 @@ def blob_source(repo_map, paths, contents):
 """
 
 
-def prelude_source(repo_map, label, text):
+def prelude_source(repo_map, label, text, reading_instructions=READ_INSTRUCTION):
     path = PurePosixPath("__kb_prelude__") / label
-    return blob_source(repo_map, [path], {path: text})
+    return blob_source(repo_map, [path], {path: text}, reading_instructions)
 
 
-def compact_one(label, text, thin_threshold, model, effort):
+def compact_one(label, text, thin_threshold, model, effort, instructions=kb_api.CHARTER):
     items = [kb_api.u(text)]
     out, secs, usage = kb_api.compact(
-        items, model=model, effort=effort, retry_label=label
+        items, model=model, effort=effort, retry_label=label, instructions=instructions
     )
     blobs = [item for item in out if item.get("type") in kb_api.COMPACTION_TYPES]
     if (usage.get("output_tokens") or 0) < thin_threshold:
         out2, secs2, usage2 = kb_api.compact(
             items, model=model, effort=effort,
-            retry_label=f"{label} thin-redraw",
+            retry_label=f"{label} thin-redraw", instructions=instructions,
         )
         blobs2 = [item for item in out2 if item.get("type") in kb_api.COMPACTION_TYPES]
         if (usage2.get("output_tokens") or 0) > (usage.get("output_tokens") or 0):
@@ -296,6 +295,7 @@ def checkpoint_pack(
 
 def compact_pending(
     name, state, work, order_by_pack, workers, thin_threshold, model, effort,
+    instructions=kb_api.CHARTER,
 ):
     """Compact concurrently while checkpointing every completed pack.
 
@@ -305,7 +305,7 @@ def compact_pending(
     """
     def run_one(item):
         _pack_id, label, _paths, source, _estimated, _is_prelude = item
-        return compact_one(label, source, thin_threshold, model, effort)
+        return compact_one(label, source, thin_threshold, model, effort, instructions=instructions)
 
     failures = []
     completed = 0
@@ -333,6 +333,8 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--repo", required=True)
     parser.add_argument("--repo-map", required=True)
+    parser.add_argument("--reading-instructions-file", help="UTF-8 file replacing each pack's reading instructions")
+    parser.add_argument("--instructions-file", help="UTF-8 file replacing compaction API instructions")
     parser.add_argument(
         "--prelude-file", action="append", default=[],
         help="compress this non-repository context first; repeatable",
@@ -358,6 +360,10 @@ def main():
     if not repo_map_path.is_file():
         raise SystemExit(f"repo_map not found: {repo_map_path}")
     repo_map = repo_map_path.read_text(errors="replace")
+    reading_instructions = (Path(args.reading_instructions_file).expanduser().read_text(encoding="utf-8")
+                            if args.reading_instructions_file is not None else READ_INSTRUCTION)
+    instructions = (Path(args.instructions_file).expanduser().read_text(encoding="utf-8")
+                    if args.instructions_file is not None else kb_api.CHARTER)
     prelude_files = [Path(path).expanduser().resolve() for path in args.prelude_file]
     for path in prelude_files:
         if not path.is_file():
@@ -376,7 +382,7 @@ def main():
             included.append(rel)
             contents[rel] = data.decode("utf-8")
 
-    prefix_tokens = kb_api.est_tokens(blob_source(repo_map, [], {}))
+    prefix_tokens = kb_api.est_tokens(blob_source(repo_map, [], {}, reading_instructions))
     # File manifests, separators, and JSON message wrapping add a small amount that is not
     # represented by the sum of individual file blocks. Keep a fixed safety margin.
     capacity = args.budget_tokens - prefix_tokens - 2_000
@@ -396,6 +402,8 @@ def main():
     state["source_total_tokens"] = sum(block_tokens.values())
     state["model"] = args.model
     state["effort"] = args.effort
+    state["reading_instructions"] = reading_instructions
+    state["instructions"] = instructions
     state["skipped"] = skipped
     fed = set(state["fed"])
     pending = []
@@ -404,7 +412,7 @@ def main():
     prelude_ids = []
     for index, path in enumerate(prelude_files, 1):
         label_name = f"{index:02d}-{path.name}"
-        source = prelude_source(repo_map, label_name, path.read_text(errors="replace"))
+        source = prelude_source(repo_map, label_name, path.read_text(errors="replace"), reading_instructions)
         pack_id = digest(source.encode())
         planned_pack_ids.append(pack_id)
         prelude_ids.append(pack_id)
@@ -428,7 +436,7 @@ def main():
         )
     state["prelude_files"] = [str(path) for path in prelude_files]
     for index, paths in enumerate(packs, 1):
-        source = blob_source(repo_map, paths, contents)
+        source = blob_source(repo_map, paths, contents, reading_instructions)
         pack_id = digest(source.encode())
         planned_pack_ids.append(pack_id)
         label = f"pack-{index:02d}:{common_directory(paths)}"
@@ -462,12 +470,12 @@ def main():
     if prelude_work:
         compact_pending(
             args.name, state, prelude_work, order_by_pack, args.workers,
-            args.thin_threshold, args.model, args.effort,
+            args.thin_threshold, args.model, args.effort, instructions=instructions,
         )
     if source_work:
         compact_pending(
             args.name, state, source_work, order_by_pack, args.workers,
-            args.thin_threshold, args.model, args.effort,
+            args.thin_threshold, args.model, args.effort, instructions=instructions,
         )
 
     current = Path(kb_api.STATE_ROOT) / "kb-current"

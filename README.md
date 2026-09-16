@@ -129,6 +129,44 @@ two_stage:
 1回引き直します。出力トークン数は品質保証ではありません。一次の引き直しは設定値0で無効化可能。
 SSE内のfailed/incompleteや暗号化blob欠落は成功扱いしません。
 
+### KB作成時の指示を変更する
+
+次の2つを、それぞれUTF-8テキストファイルで指定できます。
+
+```bash
+uv run python kb_repo_url.py /path/to/repository \
+  --name my-kb-custom \
+  --origin https://your-pool.example --key-file /path/to/pool-client.key \
+  --reading-instructions-file ./reading.txt \
+  --instructions-file ./instructions.txt
+```
+
+- `--reading-instructions-file`: 各パックの `READING INSTRUCTIONS` の読解指示を置換。
+  共通map、ファイル一覧、各ファイルの全文は通常どおり付きます。preludeにも同じ指示を使います。
+- `--instructions-file`: 一次・二次圧縮のAPI `instructions` を置換。
+
+片方だけでも指定できます。未指定なら既定文を使い、指定した場合はファイル全文で置換します。
+空白・改行は削らず、空ファイルなら指示は空文字になります。再試行・引き直しにも同じ文を使います。
+`kb_repo.py` を直接実行する場合も、同じ2つのオプションを使えます。
+
+既定の読解指示:
+
+```text
+以下のファイルをすべて全文読んでよく咀嚼し、以後、これらのファイルに対する様々な作業や質問、検索で使える知識として保持してください。
+構造マップはあくまで静的解析に基づく構造情報です。実装と矛盾する場合は実装を正とし、推測を事実として扱わないでください。
+```
+
+既定のAPI `instructions`:
+
+```text
+あなたはKB(知識ベース)である。与えられる文書を全て精読し、知識として保持する。要約を求められたら核心を落とさない。
+```
+
+生成時の指示は `state.json` の `reading_instructions` と `instructions` に記録します。
+`kb_api.py merge-old` は保存済みのAPI指示を使い、`--instructions-file` で上書きもできます。
+既存blobの指示は後から変更できないため、指示を変えて作り直す場合は新しい `--name` を使ってください。
+再開時は初回と同じ指示ファイルを指定します。
+
 ### 保存先・再開・fork
 
 既定は `~/.kb-repomap/`。このツールの `KB_REPOMAP_HOME` で変更できます。

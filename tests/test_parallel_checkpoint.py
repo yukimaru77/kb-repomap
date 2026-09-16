@@ -29,7 +29,7 @@ class ParallelCheckpointTest(unittest.TestCase):
         state = kb_repo.new_state(Path("/tmp/repository"))
         released = threading.Event()
 
-        def compact(label, _source, _threshold, _model, _effort):
+        def compact(label, _source, _threshold, _model, _effort, **_kwargs):
             if label == "first":
                 released.wait(timeout=1)
                 time.sleep(0.05)
@@ -64,7 +64,7 @@ class ParallelCheckpointTest(unittest.TestCase):
         state = kb_repo.new_state(Path("/tmp/repository"))
         second_done = threading.Event()
 
-        def compact(label, _source, _threshold, _model, _effort):
+        def compact(label, _source, _threshold, _model, _effort, **_kwargs):
             if label == "first":
                 second_done.wait(timeout=1)
                 time.sleep(0.05)

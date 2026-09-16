@@ -19,7 +19,7 @@ def sse(*events):
     ))
 
 
-def success(item=None):
+def success(item=None, output_tokens=3000):
     if item is None:
         item = {"type": "compaction", "id": "blob", "encrypted_content": "opaque",
                 "future_metadata": {"keep": True}}
@@ -28,7 +28,7 @@ def success(item=None):
         {"type": "future.event", "unknown": True},
         {"type": "response.output_item.done", "item": item},
         {"type": "response.completed", "response": {
-            "output": [], "usage": {"input_tokens": 5000, "output_tokens": 3000}}},
+            "output": [], "usage": {"input_tokens": 5000, "output_tokens": output_tokens}}},
     )
 
 
@@ -49,10 +49,23 @@ class CompactV2Test(unittest.TestCase):
         self.assertEqual(body["input"], original + [{"type": "compaction_trigger"}])
         self.assertEqual(items, original)
         self.assertEqual(body["model"], "gpt-test")
+        self.assertEqual(body["instructions"], kb_api.CHARTER)
         self.assertEqual(body["reasoning"], {"effort": "high"})
         self.assertTrue(body["stream"])
         self.assertFalse(body["store"])
         self.assertEqual(output[0]["future_metadata"], {"keep": True})
+        self.assertEqual(usage["output_tokens"], 3000)
+
+    def test_custom_api_instructions_survive_first_stage_redraw(self):
+        instructions = " 質問・検索に使う知識を保持。\n\nパスも残す。\n"
+        with mock.patch.object(kb_api, "http", side_effect=[
+            success(output_tokens=100), success(),
+        ]) as request:
+            _, _, usage = kb_repo.compact_one(
+                "pack", "全文", 2000, "gpt-test", "high", instructions=instructions,
+            )
+        self.assertEqual(request.call_count, 2)
+        self.assertTrue(all(call.args[1]["instructions"] == instructions for call in request.call_args_list))
         self.assertEqual(usage["output_tokens"], 3000)
 
     def test_all_encrypted_compaction_types_survive_stage_one(self):
@@ -62,6 +75,25 @@ class CompactV2Test(unittest.TestCase):
                 with mock.patch.object(kb_api, "http", return_value=success(item)):
                     blobs, _, _ = kb_repo.compact_one("pack", "source", 2000, "gpt-test", "low")
                 self.assertEqual(blobs, [item])
+
+    def test_second_stage_inherits_or_overrides_api_instructions_through_redraw(self):
+        saved = "一次生成で使った指示。\n"
+        for override in (None, "別の指示。\n", ""):
+            state = {"blobs": [
+                {"type": "compaction", "id": f"b-{i}", "encrypted_content": f"opaque-{i}"}
+                for i in range(2)
+            ], "rounds": [], "instructions": saved}
+            with self.subTest(override=override), \
+                    mock.patch.object(kb_api, "load_state", return_value=state), \
+                    mock.patch.object(kb_api, "save_state"), \
+                    mock.patch("shutil.copy"), \
+                    mock.patch.object(kb_api, "http", side_effect=[
+                        success(output_tokens=100), success(),
+                    ]) as request:
+                kb_api.cmd_merge_old("fixture", 0, blob_count=2, instructions=override)
+            self.assertEqual(request.call_count, 2)
+            for call in request.call_args_list:
+                self.assertEqual(call.args[1]["instructions"], saved if override is None else override)
 
     def test_multiline_crlf_comments_and_done_marker(self):
         wire = b': ping\r\nevent: event\r\ndata: {"type":\r\ndata: "future.event"}\r\n\r\ndata: [DONE]\r\n\r\n'

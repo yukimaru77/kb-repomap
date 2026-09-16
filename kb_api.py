@@ -174,8 +174,8 @@ def compact_error_summary(error):
 
 
 def compact(items, model=DEFAULT_MODEL, effort=DEFAULT_EFFORT,
-            retry_label="compact"):
-    body = {"model": model, "input": [*items, {"type": "compaction_trigger"}], "instructions": CHARTER,
+            retry_label="compact", instructions=CHARTER):
+    body = {"model": model, "input": [*items, {"type": "compaction_trigger"}], "instructions": instructions,
             "stream": True, "store": False,
             "reasoning": {"effort": effort},  # 深い思考で要約(保持量が増える実測傾向)
             "parallel_tool_calls": False}
@@ -316,7 +316,7 @@ def plan_count_groups(blobs, token_map, blob_count):
 
 def cmd_merge_old(name, keep_recent, budget_tokens=150_000, model=DEFAULT_MODEL,
                   effort=DEFAULT_EFFORT, workers=DEFAULT_COMPACT_WORKERS,
-                  blob_count=None):
+                  blob_count=None, instructions=None):
     """2段階ブロブ制: 個数、または実測output token合計で生ブロブを畳む(2段目)。
     鉄則: 統合済みブロブ(state['stage2_ids']に記録)は二度と再統合しない — 圧縮は
     どの知識も生涯2回まで(3回目からは知識が溶ける: KB-v1の実証)。単独groupだけは
@@ -330,6 +330,8 @@ def cmd_merge_old(name, keep_recent, budget_tokens=150_000, model=DEFAULT_MODEL,
         raise SystemExit("workers must be at least 1")
     st = load_state(name)
     blobs = [b for b in st.get("blobs") or st["base_items"] if b.get("type") in COMPACTION_TYPES]
+    if instructions is None:
+        instructions = st.get("instructions", CHARTER)
     s2 = set(st.get("stage2_ids") or [])
     prelude_ids = set(st.get("prelude_blob_ids") or [])
     preludes = [b for b in blobs if b.get("id") in prelude_ids]
@@ -379,13 +381,13 @@ def cmd_merge_old(name, keep_recent, budget_tokens=150_000, model=DEFAULT_MODEL,
         measured = f"{input_blob_tokens}tok" if input_blob_tokens is not None else "tokens unknown"
         merge_label = f"merge raw {start}..{end} ({measured})"
         out, secs, usage = compact(
-            items, model=model, effort=effort, retry_label=merge_label
+            items, model=model, effort=effort, retry_label=merge_label, instructions=instructions
         )
         news = [x for x in out if x.get("type") in COMPACTION_TYPES]
         if (usage.get("output_tokens") or 0) < 2000:  # 痩せブロブは1回引き直し(非決定性)
             out2, secs2, usage2 = compact(
                 items, model=model, effort=effort,
-                retry_label=f"{merge_label} thin-redraw",
+                retry_label=f"{merge_label} thin-redraw", instructions=instructions,
             )
             news2 = [x for x in out2 if x.get("type") in COMPACTION_TYPES]
             if (usage2.get("output_tokens") or 0) > (usage.get("output_tokens") or 0):
@@ -487,6 +489,7 @@ def main():
     mg.add_argument("--workers", type=int, default=DEFAULT_COMPACT_WORKERS,
                     help="同時compact数")
     mg.add_argument("--model", default=DEFAULT_MODEL)
+    mg.add_argument("--instructions-file", help="UTF-8 API instructions; defaults to the KB's saved instructions")
     mg.add_argument("--effort", choices=("none", "minimal", "low", "medium", "high", "xhigh"),
                     default=DEFAULT_EFFORT)
     s = sub.add_parser("status"); s.add_argument("--name", required=True)
@@ -501,6 +504,8 @@ def main():
         cmd_merge_old(
             ar.name, ar.keep_recent, ar.budget_tokens, ar.model, ar.effort, ar.workers,
             blob_count=ar.blob_count,
+            instructions=(Path(ar.instructions_file).expanduser().read_text(encoding="utf-8")
+                          if ar.instructions_file is not None else None),
         )
     else:
         st = load_state(ar.name)
