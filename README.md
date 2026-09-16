@@ -82,7 +82,7 @@ mapは構造・識別子の抜粋で、従来のLLMによる業務・設計解�
 - `--dry-run`: clone・map生成・パック計画まで。推論API呼び出しなし。
 - `--map-only`: clone・map生成まで。
 - `--map-tokens 10000`: mapの予算。
-- `--repo-map /path/to/map.txt`: 作成済みmapを使う。
+- `--repo-map /path/to/map.txt`: 共通mapをファイルで指定する。自作のMarkdown概要なども使える。
 - `--refresh-map`: 同じコミットでもmapを再生成。
 - `--ref main`: ブランチ・タグ・コミットを指定。
 - `--second-stage-count N`: 二次圧縮を有効にし、一次blobをN個ずつまとめる。
@@ -129,25 +129,30 @@ two_stage:
 1回引き直します。出力トークン数は品質保証ではありません。一次の引き直しは設定値0で無効化可能。
 SSE内のfailed/incompleteや暗号化blob欠落は成功扱いしません。
 
-### KB作成時の指示を変更する
+### KB作成時の共通マップ・指示を変更する
 
-次の2つを、それぞれUTF-8テキストファイルで指定できます。
+共通マップと2種類の指示を、それぞれUTF-8テキストファイルで指定できます。
 
 ```bash
 uv run python kb_repo_url.py /path/to/repository \
   --name my-kb-custom \
   --origin https://your-pool.example --key-file /path/to/pool-client.key \
+  --repo-map ./map.md \
   --reading-instructions-file ./reading.txt \
   --instructions-file ./instructions.txt
 ```
 
+- `--repo-map`: 指定ファイルの全文を全パックの `REPOSITORY MAP` 部分へ入れる。
+  Aider形式に限定せず、自作の概要・構成説明なども使えます。指定時はAiderによる生成を省略し、
+  未指定ならAiderで自動生成します。`--map-tokens` は自動生成時の予算です。
 - `--reading-instructions-file`: 各パックの `READING INSTRUCTIONS` の読解指示を置換。
   共通map、ファイル一覧、各ファイルの全文は通常どおり付きます。preludeにも同じ指示を使います。
 - `--instructions-file`: 一次・二次圧縮のAPI `instructions` を置換。
 
-片方だけでも指定できます。未指定なら既定文を使い、指定した場合はファイル全文で置換します。
+各オプションは単独でも併用でも指定できます。2種類の指示は未指定なら既定文を使い、
+指定した場合はファイル全文で置換します。
 空白・改行は削らず、空ファイルなら指示は空文字になります。再試行・引き直しにも同じ文を使います。
-`kb_repo.py` を直接実行する場合も、同じ2つのオプションを使えます。
+`kb_repo.py` を直接実行する場合も、これらのオプションを使えます。
 
 既定の読解指示:
 
