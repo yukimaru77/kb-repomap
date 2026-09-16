@@ -65,7 +65,8 @@ Codex側の設定・ログイン・環境変数を変更する処理はありま
    従来のバイナリ・生成物・大きなデータファイル等の除外ルールを引き継ぐ。
 3. `input` の末尾に `{"type":"compaction_trigger"}` を追加し、`stream=true, store=false` で送信。
    SSEの `response.output_item.done` から暗号化blobを取得し、`response.completed` と使用量を確認。
-4. 二段階圧縮が有効なら、一次のAPI報告出力トークン数を目安に隣接blobをまとめ、同じv2で再圧縮。
+4. 二段階圧縮を選んだ場合だけ、指定した個数または一次のAPI報告出力トークン数の合計で
+   隣接blobをまとめ、同じv2で再圧縮。既定ではこの工程を省略し、一次blobをそのまま使う。
    最終結果も複数blobになり得る。出力トークン数は二次入力の見積もりであり厳密な上限保証ではない。
 5. セッション情報＋blob列＋KB用の指示を、新しいCodexセッションJSONLとして書く。
 
@@ -84,12 +85,44 @@ mapは構造・識別子の抜粋で、従来のLLMによる業務・設計解�
 - `--repo-map /path/to/map.txt`: 作成済みmapを使う。
 - `--refresh-map`: 同じコミットでもmapを再生成。
 - `--ref main`: ブランチ・タグ・コミットを指定。
-- `--no-two-stage`: 一次blobのまま使う。
+- `--second-stage-count N`: 二次圧縮を有効にし、一次blobをN個ずつまとめる。
+- `--second-stage-budget-tokens N`: 二次圧縮を有効にし、一次blobの出力トークン合計N以下でまとめる。
+- `--two-stage`: 設定ファイルの方式で二次圧縮を有効にする（既定の方式はトークン合計）。
+- `--no-two-stage`: 明示的に二次圧縮を無効にする。方式のオプションより優先。
 - `--no-mint`: Codexのセッションファイルを作らずblob生成まで。
 - `--prelude-file metadata.md`: 追加資料を別blobとして先頭へ置く。二段階圧縮の対象外。
 
 [config.yaml](config.yaml) の既定値は `gpt-5.6-sol / high`、最大10並列、map予算10K、
-一次パック予算150K、二次グループ予算150K、二段階圧縮ありです。
+一次パック予算150K、**二次圧縮なし**です。
+
+通常の作成コマンドに、必要な場合だけ次のどちらかを追加します。
+
+```bash
+# 一次blobを4個ずつまとめて二次圧縮
+--second-stage-count 4
+
+# 一次blobのAPI報告出力トークン数を、合計150,000以下ずつまとめて二次圧縮
+--second-stage-budget-tokens 150000
+```
+
+この2つの方式は同時には指定できません。個数は「最終blobの個数」ではなく、
+「二次圧縮1回へ入れる一次blobの個数」です。個数方式ではトークン上限による分割を追加しません。
+トークン方式は `state.json` の `blob_output_tokens`（一次APIの `usage.output_tokens`）を使い、
+暗号化文字列の長さをトークン数に換算しません。単独になったblobは再圧縮せず残します。
+preludeと二次圧縮済みblobは、どちらの方式でも対象外です。
+
+設定ファイルでも指定できます。
+
+```yaml
+two_stage:
+  enabled: false       # trueにすると既定で二次圧縮する
+  mode: tokens         # tokens または count
+  token_budget: 150000 # mode: tokens のとき
+  count: 4             # mode: count のとき
+```
+
+既存KBに後から方式を指定して同じコマンドを再実行すれば、完了済み一次パックを再生成せず
+二次圧縮できます。無効化オプションは、すでに作成済みの二次blobを一次へ戻す操作ではありません。
 
 旧ツールの再試行・引き直しも引き継ぎます。一時的なHTTP/接続・読み取りエラーは最大6回試行。
 一次の報告出力が `thin_blob_threshold`（既定2,000）未満なら1回引き直し、二次は2,000未満で

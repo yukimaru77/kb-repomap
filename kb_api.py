@@ -301,14 +301,30 @@ def plan_token_groups(blobs, token_map, budget_tokens):
     return groups
 
 
+def plan_count_groups(blobs, token_map, blob_count):
+    """Group adjacent blobs by count; token measurements are only for reporting."""
+    if blob_count < 1:
+        raise SystemExit("blob count must be at least 1")
+    groups = []
+    for start in range(0, len(blobs), blob_count):
+        group = blobs[start:start + blob_count]
+        measured = [token_map.get(blob.get("id")) for blob in group]
+        tokens = sum(measured) if all(isinstance(t, int) and t >= 0 for t in measured) else None
+        groups.append((start, start + len(group) - 1, group, tokens))
+    return groups
+
+
 def cmd_merge_old(name, keep_recent, budget_tokens=150_000, model=DEFAULT_MODEL,
-                  effort=DEFAULT_EFFORT, workers=DEFAULT_COMPACT_WORKERS):
-    """2段階ブロブ制: 生ブロブを実測token合計budget_tokens以下で畳む(2段目)。
+                  effort=DEFAULT_EFFORT, workers=DEFAULT_COMPACT_WORKERS,
+                  blob_count=None):
+    """2段階ブロブ制: 個数、または実測output token合計で生ブロブを畳む(2段目)。
     鉄則: 統合済みブロブ(state['stage2_ids']に記録)は二度と再統合しない — 圧縮は
     どの知識も生涯2回まで(3回目からは知識が溶ける: KB-v1の実証)。単独groupだけは
     無意味な再圧縮を避けて生のまま残す。実質量は各roundのAPI output_tokensを使い、
     encrypted_contentのtiktoken計測は使わない。keep_recentは廃止(無視)。"""
-    if budget_tokens < 1:
+    if blob_count is not None and blob_count < 1:
+        raise SystemExit("blob count must be at least 1")
+    if blob_count is None and budget_tokens < 1:
         raise SystemExit("budget tokens must be at least 1")
     if workers < 1:
         raise SystemExit("workers must be at least 1")
@@ -329,7 +345,12 @@ def cmd_merge_old(name, keep_recent, budget_tokens=150_000, model=DEFAULT_MODEL,
         save_state(name, st)
         print(f"生ブロブ{len(raw)}個 — 畳むものなし(統合済み{len(done)}個)"); return
     token_map = st.get("blob_output_tokens") or {}
-    planned_groups = plan_token_groups(raw, token_map, budget_tokens)
+    if blob_count is None:
+        planned_groups = plan_token_groups(raw, token_map, budget_tokens)
+        group_description = f"実測合計{budget_tokens}tok以下"
+    else:
+        planned_groups = plan_count_groups(raw, token_map, blob_count)
+        group_description = f"{blob_count}個ずつ"
     work = [
         (start, end, group, tokens)
         for start, end, group, tokens in planned_groups
@@ -341,21 +362,22 @@ def cmd_merge_old(name, keep_recent, budget_tokens=150_000, model=DEFAULT_MODEL,
         save_state(name, st)
         print(
             f"生ブロブ{len(raw)}個はすべて単独group — 畳むものなし"
-            f"(上限{budget_tokens}tok、統合済み{len(done)}個)"
+            f"({group_description}、統合済み{len(done)}個)"
         )
         return
     import shutil
     shutil.copy(state_path(name), state_path(name) + ".pre-merge")
     merge_blob_count = sum(len(group) for _start, _end, group, _tokens in work)
     print(
-        f"生{len(raw)}個のうち{merge_blob_count}個を実測合計{budget_tokens}tok以下・"
+        f"生{len(raw)}個のうち{merge_blob_count}個を{group_description}・"
         f"最大{min(workers, len(work))}並列で畳む(統合済み{len(done)}個は不可侵)"
     )
 
     def merge_group(task):
         start, end, grp, input_blob_tokens = task
         items = [u("以下は複数の圧縮済み知識ブロブである。含まれる論文知識を全て保持したまま統合せよ。")] + grp
-        merge_label = f"merge raw {start}..{end} ({input_blob_tokens}tok)"
+        measured = f"{input_blob_tokens}tok" if input_blob_tokens is not None else "tokens unknown"
+        merge_label = f"merge raw {start}..{end} ({measured})"
         out, secs, usage = compact(
             items, model=model, effort=effort, retry_label=merge_label
         )
@@ -388,7 +410,7 @@ def cmd_merge_old(name, keep_recent, budget_tokens=150_000, model=DEFAULT_MODEL,
                 "out": summarize_items(news),
             })
             print(
-                f"  {start}..{end} ({input_blob_tokens}tok) → 1個 "
+                f"  {start}..{end} → 1個 "
                 f"(out={usage.get('output_tokens')}tok / {secs}s)"
             )
 
@@ -457,8 +479,11 @@ def main():
     mg = sub.add_parser("merge-old", help="容量衛生: 旧層ブロブの2段マージ")
     mg.add_argument("--name", required=True)
     mg.add_argument("--keep-recent", type=int, default=20, help="生のまま温存する直近ブロブ数")
-    mg.add_argument("--budget-tokens", type=int, default=150_000,
+    grouping = mg.add_mutually_exclusive_group()
+    grouping.add_argument("--budget-tokens", type=int, default=150_000,
                     help="二次圧縮1回へ詰める一次blobの実測token上限")
+    grouping.add_argument("--blob-count", type=int,
+                    help="二次圧縮1回へ詰める一次blobの個数")
     mg.add_argument("--workers", type=int, default=DEFAULT_COMPACT_WORKERS,
                     help="同時compact数")
     mg.add_argument("--model", default=DEFAULT_MODEL)
@@ -474,7 +499,8 @@ def main():
         cmd_ask(ar.name, ar.question, ar.blob_only)
     elif ar.cmd == "merge-old":
         cmd_merge_old(
-            ar.name, ar.keep_recent, ar.budget_tokens, ar.model, ar.effort, ar.workers
+            ar.name, ar.keep_recent, ar.budget_tokens, ar.model, ar.effort, ar.workers,
+            blob_count=ar.blob_count,
         )
     else:
         st = load_state(ar.name)

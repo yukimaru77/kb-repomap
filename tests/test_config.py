@@ -15,12 +15,59 @@ spec.loader.exec_module(kb_repo_url)
 
 
 class ConfigTest(unittest.TestCase):
-    def test_repository_defaults_enable_token_budgeted_second_stage(self):
+    def test_repository_defaults_disable_second_stage(self):
         config = kb_repo_url.load_config(ROOT / "config.yaml")
-        self.assertTrue(config["two_stage_enabled"])
+        self.assertFalse(config["two_stage_enabled"])
+        self.assertEqual(config["second_stage_mode"], "tokens")
         self.assertEqual(config["second_stage_budget_tokens"], 150000)
         self.assertEqual(config["workers"], 10)
         self.assertEqual(config["map_tokens"], 10000)
+
+    def test_omitted_two_stage_config_is_disabled(self):
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / "empty.yaml"
+            path.write_text("")
+            self.assertFalse(kb_repo_url.load_config(path)["two_stage_enabled"])
+
+    def test_count_config_without_pyyaml(self):
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / "count.yaml"
+            path.write_text("two_stage:\n  enabled: true\n  mode: count\n  count: 7\n")
+            with mock.patch.object(kb_repo_url, "yaml", None):
+                config = kb_repo_url.load_config(path)
+        self.assertTrue(config["two_stage_enabled"])
+        self.assertEqual(config["second_stage_mode"], "count")
+        self.assertEqual(config["second_stage_count"], 7)
+
+    def test_cli_enables_only_requested_grouping_and_still_mints(self):
+        cases = [
+            ([], None),
+            (["--two-stage"], ["--budget-tokens", "150000"]),
+            (["--second-stage-count", "3"], ["--blob-count", "3"]),
+            (["--second-stage-budget-tokens", "90000"], ["--budget-tokens", "90000"]),
+            (["--no-two-stage", "--second-stage-count", "3"], None),
+        ]
+        with tempfile.TemporaryDirectory() as temp:
+            source = Path(temp)
+            repo_map = source / "map.txt"
+            repo_map.write_text("app.py\n")
+            for options, expected in cases:
+                argv = ["kb_repo_url.py", str(source), "--name", "example", "--repo-map", str(repo_map), *options]
+                with self.subTest(options=options), \
+                        mock.patch.object(kb_repo_url.sys, "argv", argv), \
+                        mock.patch.object(kb_repo_url, "clone_repository"), \
+                        mock.patch.object(kb_repo_url.subprocess, "check_output", return_value="HEAD\n"), \
+                        mock.patch.object(kb_repo_url.kb_api, "pool_configuration"), \
+                        mock.patch.object(kb_repo_url, "run") as run:
+                    kb_repo_url.main()
+                commands = [call.args[0] for call in run.call_args_list]
+                merges = [command for command in commands if "merge-old" in command]
+                self.assertTrue(commands[-1][1].endswith("kb_fork_mint.py"))
+                if expected is None:
+                    self.assertEqual(merges, [])
+                else:
+                    self.assertEqual(len(merges), 1)
+                    self.assertEqual(merges[0][-2:], expected)
 
     def test_reads_edited_yaml_without_pyyaml(self):
         content = """

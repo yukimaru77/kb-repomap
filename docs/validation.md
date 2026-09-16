@@ -27,7 +27,7 @@ This checks extracted-engine parity, not arbitrary Aider model/config settings.
 uv run python -m unittest discover -s tests -v
 ```
 
-Result: `Ran 32 tests in 5.977s` / `OK`.
+Result: `Ran 39 tests in 10.911s` / `OK`.
 
 Covers map generation without inference, `.aiderignore`, source packing,
 SSE framing and unknown events, native compaction types and unknown item fields,
@@ -35,6 +35,12 @@ completion/failure handling, existing retries, checkpoint order, two-stage group
 fork-session blob preservation and ordinals. A local HTTP server exercises the
 actual CLI from clone/map through both compaction stages and a resumed run.
 All requests go to `/_pool/rr/responses`; no legacy compact route is used.
+
+The default run now creates only first-stage blobs. HTTP integration tests then
+opt into count-based grouping (two blobs) or token-based grouping (6,000 measured
+output tokens), and verify that first-stage packs are reused. Grouping tests cover
+unpaired blobs, preservation of order, prelude/already-merged exclusions, and count
+grouping without token measurements. Token grouping retains its measured-token rule.
 
 ## Live pool / upstream test
 

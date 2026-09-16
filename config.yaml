@@ -2,9 +2,11 @@
 chunk_tokens: 150000
 map_tokens: 10000
 
-# Generate a smaller optional variant by filling each second-stage input by measured tokens.
+# Second-stage compaction is opt-in: group by blob count or measured output tokens.
 two_stage:
-  enabled: true
+  enabled: false
+  mode: tokens              # tokens: total output tokens; count: number of blobs
+  count: 4                  # blobs per group when mode is count
   token_budget: 150000
 
 # Used by both v2 compaction (repository map generation has no LLM).

@@ -160,7 +160,9 @@ def load_config(path):
         raise SystemExit("config.two_stage must be a mapping")
     config = {
         "chunk_tokens": data.get("chunk_tokens", 150_000),
-        "two_stage_enabled": two_stage.get("enabled", True),
+        "two_stage_enabled": two_stage.get("enabled", False),
+        "second_stage_mode": two_stage.get("mode", "tokens"),
+        "second_stage_count": two_stage.get("count", 4),
         "second_stage_budget_tokens": two_stage.get(
             "token_budget", data.get("chunk_tokens", 150_000)
         ),
@@ -171,13 +173,15 @@ def load_config(path):
         "thin_blob_threshold": data.get("thin_blob_threshold", 2_000),
         "map_tokens": data.get("map_tokens", 10_000),
     }
-    for key in ("chunk_tokens", "second_stage_budget_tokens", "workers", "max_file_bytes", "map_tokens"):
+    for key in ("chunk_tokens", "second_stage_budget_tokens", "second_stage_count", "workers", "max_file_bytes", "map_tokens"):
         if not isinstance(config[key], int) or config[key] <= 0:
             raise SystemExit(f"config.{key} must be a positive integer")
     if not isinstance(config["thin_blob_threshold"], int) or config["thin_blob_threshold"] < 0:
         raise SystemExit("config.thin_blob_threshold must be a non-negative integer")
     if not isinstance(config["two_stage_enabled"], bool):
         raise SystemExit("config.two_stage.enabled must be true or false")
+    if config["second_stage_mode"] not in {"tokens", "count"}:
+        raise SystemExit("config.two_stage.mode must be tokens or count")
     if not isinstance(config["model"], str) or not config["model"].strip():
         raise SystemExit("config.model must be a non-empty string")
     if config["effort"] not in EFFORTS:
@@ -226,9 +230,14 @@ def main():
         help="keep first-stage blobs without a second compaction",
     )
     parser.set_defaults(two_stage=None)
-    parser.add_argument(
+    grouping = parser.add_mutually_exclusive_group()
+    grouping.add_argument(
         "--second-stage-budget-tokens", type=int,
-        help="measured first-stage output tokens per second-stage compaction",
+        help="enable second-stage compaction grouped by total measured first-stage output tokens",
+    )
+    grouping.add_argument(
+        "--second-stage-count", type=int,
+        help="enable second-stage compaction grouped by this number of first-stage blobs",
     )
     parser.add_argument("--dry-run", action="store_true", help="plan packs without API calls")
     parser.add_argument("--map-only", dest="map_only", action="store_true")
@@ -254,11 +263,21 @@ def main():
     two_stage_enabled = (
         config["two_stage_enabled"] if args.two_stage is None else args.two_stage
     )
-    second_stage_budget_tokens = (
-        args.second_stage_budget_tokens or config["second_stage_budget_tokens"]
-    )
-    if second_stage_budget_tokens < 1:
-        raise SystemExit("--second-stage-budget-tokens must be positive")
+    second_stage_mode = config["second_stage_mode"]
+    second_stage_budget_tokens = config["second_stage_budget_tokens"]
+    second_stage_count = config["second_stage_count"]
+    if args.second_stage_budget_tokens is not None:
+        second_stage_mode = "tokens"
+        second_stage_budget_tokens = args.second_stage_budget_tokens
+        if second_stage_budget_tokens < 1:
+            parser.error("--second-stage-budget-tokens must be positive")
+        two_stage_enabled = args.two_stage is not False
+    elif args.second_stage_count is not None:
+        second_stage_mode = "count"
+        second_stage_count = args.second_stage_count
+        if second_stage_count < 1:
+            parser.error("--second-stage-count must be positive")
+        two_stage_enabled = args.two_stage is not False
 
     source = validate_source(args.url)
     name = args.name or safe_slug(source)
@@ -296,11 +315,16 @@ def main():
         command.append("--dry-run")
     run(command)
     if not args.dry_run and two_stage_enabled:
-        run([
+        merge_command = [
             sys.executable, str(Path(__file__).with_name("kb_api.py")), "merge-old",
-            "--name", name, "--budget-tokens", str(second_stage_budget_tokens),
+            "--name", name,
             "--model", model, "--effort", effort, "--workers", str(workers),
-        ])
+        ]
+        if second_stage_mode == "count":
+            merge_command += ["--blob-count", str(second_stage_count)]
+        else:
+            merge_command += ["--budget-tokens", str(second_stage_budget_tokens)]
+        run(merge_command)
     if not args.dry_run and not args.no_mint:
         run([sys.executable, str(Path(__file__).with_name("kb_fork_mint.py")), "--name", name])
 

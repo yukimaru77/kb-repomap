@@ -13,7 +13,13 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class PipelineTest(unittest.TestCase):
-    def test_clone_map_two_stage_and_resume_over_http(self):
+    def test_default_then_count_grouping_over_http(self):
+        self.check_pipeline(["--second-stage-count", "2"])
+
+    def test_default_then_token_grouping_over_http(self):
+        self.check_pipeline(["--second-stage-budget-tokens", "6000"])
+
+    def check_pipeline(self, grouping_options):
         calls = []
         lock = threading.Lock()
 
@@ -71,7 +77,20 @@ class PipelineTest(unittest.TestCase):
                 state_path = state_root / "fixture" / "state.json"
                 state = json.loads(state_path.read_text())
                 self.assertGreater(state["stage1_blob_count"], 1)
-                self.assertEqual(len(state["blobs"]), 1)
+                first_stage_count = len(state["blobs"])
+                self.assertEqual(first_stage_count, state["stage1_blob_count"])
+                self.assertNotIn("stage2_ids", state)
+                self.assertTrue(all(
+                    all(item.get("type") != "compaction" for item in body["input"])
+                    for _, body in calls
+                ))
+                first_stage_calls = len(calls)
+                command += grouping_options
+                merged = subprocess.run(command, env=env, capture_output=True, text=True, timeout=60)
+                self.assertEqual(merged.returncode, 0, merged.stdout + merged.stderr)
+                state = json.loads(state_path.read_text())
+                self.assertEqual(len(state["blobs"]), (first_stage_count + 1) // 2)
+                self.assertEqual(len(calls) - first_stage_calls, first_stage_count // 2)
                 self.assertTrue(state["blobs"][0]["future_field"])
                 self.assertIn("marker_0", (state_root / "fixture" / "repository-map.txt").read_text())
                 self.assertTrue(all(path == "/_pool/rr/responses" for path, _ in calls))
@@ -79,8 +98,8 @@ class PipelineTest(unittest.TestCase):
                     self.assertEqual(body["input"][-1], {"type": "compaction_trigger"})
                     self.assertEqual(body["model"], "gpt-5.6-sol")
                     self.assertEqual(body["reasoning"], {"effort": "high"})
-                merge_input = calls[-1][1]["input"]
-                self.assertGreater(sum(x.get("type") == "compaction" for x in merge_input), 1)
+                for _, body in calls[first_stage_calls:]:
+                    self.assertEqual(sum(x.get("type") == "compaction" for x in body["input"]), 2)
                 first_count = len(calls)
                 again = subprocess.run(command, env=env, capture_output=True, text=True, timeout=60)
                 self.assertEqual(again.returncode, 0, again.stdout + again.stderr)
