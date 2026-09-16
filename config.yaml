@@ -1,0 +1,17 @@
+# Target input size for every first-stage blob, including repository-map.txt.
+chunk_tokens: 150000
+map_tokens: 10000
+
+# Generate a smaller optional variant by filling each second-stage input by measured tokens.
+two_stage:
+  enabled: true
+  token_budget: 150000
+
+# Used by both v2 compaction (repository map generation has no LLM).
+model: gpt-5.6-sol
+effort: high
+
+# Operational tuning.
+workers: 10
+max_file_bytes: 600000
+thin_blob_threshold: 2000

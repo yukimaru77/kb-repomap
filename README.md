@@ -1,0 +1,141 @@
+# kb-repomap
+
+Gitリポジトリを **Aiderの構造マップ → v2圧縮blob → Codexのfork元セッション** にするツールです。
+
+`kb-multiblob` から独立し、LLMによる概要調査をAiderから切り出したrepo-mapエンジンへ
+置き換えました。圧縮は `responses + compaction_trigger` を使うCodexの新方式です。
+
+## インストール
+
+```bash
+git clone https://github.com/yukimaru77/kb-repomap.git
+cd kb-repomap
+uv sync --locked
+```
+
+Python 3.12と依存関係をプロジェクト専用環境へ用意します。Aider本体・LiteLLM・Codex CLIは
+map/blob生成には不要です。初回のパッケージ・tiktoken辞書取得にはネットワークを使いますが、
+map生成自体にLLM呼び出しやAPIキーは不要です。
+
+## mapだけ見る
+
+```bash
+uv run python repo_map.py --repo /path/to/repository \
+  --show-repo-map --map-tokens 10000 --map-multiplier-no-files 1
+```
+
+Aiderの同じオプションで呼ばれる解析・ランキング・表示処理を独立して実行します。
+`--output repository-map.txt` でファイル出力できます。GitのHEAD/indexのファイルを対象にし、
+`.aiderignore` を適用します。キャッシュは `~/.cache/kb-repomap/` に置きます。
+
+10,000トークンはAiderと同じ近似予算です。サンプリングと15%許容幅があるため厳密な上限では
+ありません。計数は `cl100k_base`（単体コマンドの `--encoding` で変更可能）。Aider側のモデル・
+設定が異なれば出力も変わり得ます。対話用の編集禁止の前置きはmapに含めません。
+
+## リポジトリからKBを作る
+
+```bash
+uv run python kb_repo_url.py https://github.com/owner/repository.git \
+  --name my-kb \
+  --origin https://your-pool.example \
+  --key-file /path/to/pool-client.key
+```
+
+ローカルのGitリポジトリも指定できます。Tailscale等の確認済み私設トンネル内のHTTPなら:
+
+```bash
+uv run python kb_repo_url.py /path/to/repository \
+  --name my-kb \
+  --origin http://your-tailscale-host:18473 --private-http \
+  --key-file /path/to/pool-client.key
+```
+
+originには `/v1` などのパスを付けません。宛先はプールの **`/_pool/rr/responses`** です。
+一次・二次とも専用のround-robin経路を使います。認証はプールのクライアントAPIキーで行い、
+Codexの認証ファイルは読みません。アカウント選択・トークン更新はプールの担当です。
+
+このツール用の `KB_POOL_ORIGIN`、`KB_POOL_KEY_FILE`、`KB_POOL_PRIVATE_HTTP=1` でも指定できます。
+Codex側の設定・ログイン・環境変数を変更する処理はありません。
+
+### 作成の流れ
+
+1. 管理用ディレクトリへcloneし、Aiderエンジンで `repository-map.txt` を生成。
+2. 関連ディレクトリのソースを約150K入力トークンずつにまとめる。
+   各パックに共通mapと読解指示を付け、userメッセージ1件として直接圧縮へ送る。
+   従来のバイナリ・生成物・大きなデータファイル等の除外ルールを引き継ぐ。
+3. `input` の末尾に `{"type":"compaction_trigger"}` を追加し、`stream=true, store=false` で送信。
+   SSEの `response.output_item.done` から暗号化blobを取得し、`response.completed` と使用量を確認。
+4. 二段階圧縮が有効なら、一次のAPI報告出力トークン数を目安に隣接blobをまとめ、同じv2で再圧縮。
+   最終結果も複数blobになり得る。出力トークン数は二次入力の見積もりであり厳密な上限保証ではない。
+5. セッション情報＋blob列＋KB用の指示を、新しいCodexセッションJSONLとして書く。
+
+`compaction`、`compaction_summary`、暗号化内容を持つ `context_compaction` を扱います。
+blobの未知のフィールドも保存・再送し、セッション出力でも型名や内容を再構成しません。
+旧 `/responses/compact` やテキスト要約へのfallbackはありません。
+
+mapは構造・識別子の抜粋で、従来のLLMによる業務・設計解説とは内容が異なります。
+各パックにはmapだけでなく対象ソースの本文も入ります。
+
+### オプションと設定
+
+- `--dry-run`: clone・map生成・パック計画まで。推論API呼び出しなし。
+- `--map-only`: clone・map生成まで。
+- `--map-tokens 10000`: mapの予算。
+- `--repo-map /path/to/map.txt`: 作成済みmapを使う。
+- `--refresh-map`: 同じコミットでもmapを再生成。
+- `--ref main`: ブランチ・タグ・コミットを指定。
+- `--no-two-stage`: 一次blobのまま使う。
+- `--no-mint`: Codexのセッションファイルを作らずblob生成まで。
+- `--prelude-file metadata.md`: 追加資料を別blobとして先頭へ置く。二段階圧縮の対象外。
+
+[config.yaml](config.yaml) の既定値は `gpt-5.6-sol / high`、最大10並列、map予算10K、
+一次パック予算150K、二次グループ予算150K、二段階圧縮ありです。
+
+旧ツールの再試行・引き直しも引き継ぎます。一時的なHTTP/接続・読み取りエラーは最大6回試行。
+一次の報告出力が `thin_blob_threshold`（既定2,000）未満なら1回引き直し、二次は2,000未満で
+1回引き直します。出力トークン数は品質保証ではありません。一次の引き直しは設定値0で無効化可能。
+SSE内のfailed/incompleteや暗号化blob欠落は成功扱いしません。
+
+### 保存先・再開・fork
+
+既定は `~/.kb-repomap/`。このツールの `KB_REPOMAP_HOME` で変更できます。
+旧 `~/.kb-multiblob/` は使いません。
+
+```text
+~/.kb-repomap/
+  repos/my-kb/                 管理用clone
+  my-kb/repository-map.txt     構造マップ
+  my-kb/state.json             blob・完了パック・使用量
+  kb-current                  現在のKB名
+  kb-session                  fork元セッションID
+```
+
+完了済みの同一パックは再実行で省略します。古い内容を置き換える同期機構ではないため、
+別リビジョンのKBは新しい `--name` で作成してください。
+
+fork元生成は既存Codexセッションの `session_meta` をテンプレートとして読み、
+新しい `~/.codex/sessions/.../rollout-*.jsonl` を書きます。初回は既存セッションが必要です。
+
+```bash
+codex fork "$(cat ~/.kb-repomap/kb-session)"
+```
+
+## 検証
+
+```bash
+uv run python -m unittest discover -s tests -v
+uv run python scripts/check-aider-parity.py /path/to/pinned-aider /path/to/repository
+
+# 任意: 合成ソースで実APIを4回呼び、二段階圧縮後の値を照会
+uv run python scripts/live-check.py \
+  --origin https://your-pool.example --key-file /path/to/pool-client.key \
+  --output state/live-check.json
+```
+
+結果と検証範囲は [docs/validation.md](docs/validation.md) に記載しています。
+
+## 出典・ライセンス
+
+KB処理はMITの `yukimaru77/kb-multiblob` が元です。Aider部分はApache-2.0です。
+[PROVENANCE.md](PROVENANCE.md) と [Aiderの出典](vendor/aider_repomap/PROVENANCE.md) に
+元コミット・対象ファイル・変更点を記録しています。

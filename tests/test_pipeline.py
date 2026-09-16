@@ -1,0 +1,95 @@
+import json
+import os
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+import subprocess
+import sys
+import tempfile
+import threading
+import unittest
+
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+class PipelineTest(unittest.TestCase):
+    def test_clone_map_two_stage_and_resume_over_http(self):
+        calls = []
+        lock = threading.Lock()
+
+        class Handler(BaseHTTPRequestHandler):
+            def log_message(self, *_args):
+                pass
+
+            def do_POST(self):
+                body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+                with lock:
+                    number = len(calls) + 1
+                    calls.append((self.path, body))
+                item = {"id": f"blob-{number}", "type": "compaction",
+                        "encrypted_content": f"opaque-{number}", "future_field": [number]}
+                events = [
+                    {"type": "response.output_item.done", "item": item},
+                    {"type": "response.completed", "response": {
+                        "output": [], "usage": {"output_tokens": 3000}}},
+                ]
+                data = "".join("data: " + json.dumps(event) + "\n\n" for event in events).encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "text/plain")
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            with tempfile.TemporaryDirectory() as temp:
+                root = Path(temp)
+                source = root / "source"
+                source.mkdir()
+                subprocess.run(["git", "init", "-q", str(source)], check=True)
+                for index in range(4):
+                    (source / f"module_{index}.py").write_text(
+                        f"def marker_{index}():\n    return 'value_{index}'\n" +
+                        (f"# Details of module {index}, keep this source material.\n" * 130)
+                    )
+                subprocess.run(["git", "-C", str(source), "add", "."], check=True)
+                subprocess.run(["git", "-C", str(source), "-c", "user.name=Test",
+                                "-c", "user.email=test@example.com", "commit", "-qm", "fixture"], check=True)
+                key = root / "client.key"
+                key.write_text("test-key")
+                state_root = root / "state"
+                env = dict(os.environ)
+                env["KB_REPOMAP_HOME"] = str(state_root)
+                command = [sys.executable, str(ROOT / "kb_repo_url.py"), str(source),
+                           "--name", "fixture", "--budget-tokens", "5000", "--workers", "2",
+                           "--origin", f"http://127.0.0.1:{server.server_port}",
+                           "--key-file", str(key), "--no-mint"]
+                result = subprocess.run(command, env=env, capture_output=True, text=True, timeout=60)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                state_path = state_root / "fixture" / "state.json"
+                state = json.loads(state_path.read_text())
+                self.assertGreater(state["stage1_blob_count"], 1)
+                self.assertEqual(len(state["blobs"]), 1)
+                self.assertTrue(state["blobs"][0]["future_field"])
+                self.assertIn("marker_0", (state_root / "fixture" / "repository-map.txt").read_text())
+                self.assertTrue(all(path == "/_pool/rr/responses" for path, _ in calls))
+                for _, body in calls:
+                    self.assertEqual(body["input"][-1], {"type": "compaction_trigger"})
+                    self.assertEqual(body["model"], "gpt-5.6-sol")
+                    self.assertEqual(body["reasoning"], {"effort": "high"})
+                merge_input = calls[-1][1]["input"]
+                self.assertGreater(sum(x.get("type") == "compaction" for x in merge_input), 1)
+                first_count = len(calls)
+                again = subprocess.run(command, env=env, capture_output=True, text=True, timeout=60)
+                self.assertEqual(again.returncode, 0, again.stdout + again.stderr)
+                self.assertEqual(len(calls), first_count, "unchanged packs must not be regenerated")
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=5)
+
+
+if __name__ == "__main__":
+    unittest.main()

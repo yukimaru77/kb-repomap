@@ -1,0 +1,10 @@
+__pycache__/
+.venv/
+.cache/
+state/
+*.key
+*.pyc
+.kb-multiblob/
+.kb-repomap/
+state.json
+knowledge/
