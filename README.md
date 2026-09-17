@@ -192,6 +192,12 @@ uv run python kb_repo_url.py /path/to/repository \
 fork元生成は既存Codexセッションの `session_meta` をテンプレートとして読み、
 新しい `~/.codex/sessions/.../rollout-*.jsonl` を書きます。初回は既存セッションが必要です。
 
+**複数の独立したcompaction blobを同じ履歴に並べることが、このKBの意図した仕様です。**
+セッション生成時に1個へ統合したり、最後のblobだけを残したりしません。
+二次圧縮は明示的に選択した場合だけ実行します。
+`session_meta.history_mode: legacy` はJSONL履歴の保存・読み込み方式であり、
+圧縮APIのv2とは別です。各 `response_item` にはv2で返った暗号化blobをそのまま入れます。
+
 ```bash
 codex fork "$(cat ~/.kb-repomap/kb-session)"
 ```
