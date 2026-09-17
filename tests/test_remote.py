@@ -116,7 +116,7 @@ class RemoteKBTests(unittest.TestCase):
              mock.patch("kb_remote.RemoteKB") as constructor, \
              mock.patch.object(kb_codex, "start_session", return_value="new-id") as start, \
              contextlib.redirect_stdout(io.StringIO()):
-            kb_cli.main(["codex", "example", "--remote", "--store", "chosen", "--file", "v1.00.jsonl",
+            kb_cli.main(["codex", "example", "--remote", "--store", "chosen", "--file", "v1.00",
                          "--session-only", "--rebuild", "never", "--prompt", "Use it"])
         find.assert_called_once_with(config, "example", "chosen", filename="v1.00.jsonl")
         constructor.assert_called_once_with(config, loaded["jsonl"])

@@ -58,16 +58,18 @@ kb codex xx      # KB入りの新規Codexセッションを開く
 ### JSONLの保存名を指定する
 
 `--file` で `latest.jsonl` 以外の名前を指定できます。省略時は従来どおり `latest.jsonl`。
+拡張子 `.jsonl` は省略でき、`--file v1.00` と `--file v1.00.jsonl` は同じファイルを指します。
+`create`・`publish`・`codex`（`--remote` を含む）で共通です。
 
 ```bash
-kb create octane --file v1.00.jsonl
-kb codex octane --file v1.00.jsonl
+kb create octane --file v1.00
+kb codex octane --file v1.00
 kb list
 ```
 
 同じ名前で再作成すると、そのJSONLと作成情報を上書きしてcommit/pushします。
-別名のファイルや `latest.jsonl` は変更しません。`--file` にはパスを含まない `.jsonl` の
-ファイル名を指定します。空白を含む名前は引用符で囲みます。
+別名のファイルや `latest.jsonl` は変更しません。`--file` にはパスを含まないファイル名を
+指定します。末尾に `.jsonl` がなければ補います。空白を含む名前は引用符で囲みます。
 
 `kb list` はファイルごとに、KB名・保存先・作成commit・基準ブランチ・ファイル名を表示します。
 別名だけを作成した場合、`latest.jsonl` の行は「未作成」のままです。

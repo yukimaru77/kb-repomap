@@ -222,6 +222,39 @@ class GitStoreTest(unittest.TestCase):
                 kb_cli.main(["codex", "example", "--file", "v1.00.jsonl", "--session-only"])
         start.assert_not_called()
 
+    def test_file_without_suffix_creates_publishes_and_opens_the_same_jsonl(self):
+        kb_store.write_config(self.config)
+        kb_store.publish(self.store1, "example", self.info, create_only=True)
+        with mock.patch.object(kb_cli, "rebuild", return_value=self.jsonl), contextlib.redirect_stdout(io.StringIO()):
+            kb_cli.main(["create", "example", "--file", "v1.00"])
+        loaded = kb_store.find_kb(self.config, "example", filename="v1.00.jsonl")
+        self.assertEqual(loaded["jsonl"].read_bytes(), self.jsonl.read_bytes())
+
+        self.jsonl.write_bytes(self.jsonl.read_bytes() + b"\n")
+        with contextlib.redirect_stdout(io.StringIO()):
+            kb_cli.main(["publish", "example", "--file", "v1.00",
+                         "--repository-url", str(self.source), "--source-commit", self.head,
+                         "--branch", "main", "--jsonl", str(self.jsonl)])
+        for filename in ("v1.00", "v1.00.jsonl"):
+            with self.subTest(filename=filename), \
+                 mock.patch.object(kb_codex, "start_session", return_value="new-id") as start, \
+                 contextlib.redirect_stdout(io.StringIO()):
+                kb_cli.main(["codex", "example", "--file", filename, "--session-only"])
+            self.assertEqual(start.call_args.args[0].name, "v1.00.jsonl")
+            self.assertEqual(start.call_args.args[0].read_bytes(), self.jsonl.read_bytes())
+        files = kb_store.git(self.store1["url"], "ls-tree", "-r", "--name-only", "main").stdout.splitlines()
+        self.assertEqual([path for path in files if "v1.00" in path],
+                         ["example/v1.00.info.json", "example/v1.00.jsonl"])
+
+    def test_file_without_suffix_still_rejects_paths_and_empty_names(self):
+        for filename in ("../outside", "/tmp/out", "sub/path", "sub\\path", "", ".jsonl"):
+            with self.subTest(filename=filename), mock.patch.object(kb_store, "read_config") as config, \
+                 contextlib.redirect_stderr(io.StringIO()):
+                with self.assertRaises(SystemExit) as error:
+                    kb_cli.main(["codex", "example", "--file", filename])
+                self.assertEqual(error.exception.code, 2)
+                config.assert_not_called()
+
     def test_filename_cannot_escape_kb_directory_or_overwrite_metadata(self):
         for filename in ("../outside.jsonl", "/tmp/out.jsonl", "sub/path.jsonl", "sub\\path.jsonl", "info.json", ".jsonl", ""):
             with self.subTest(filename=filename), mock.patch.object(kb_store, "default_branch") as branch:

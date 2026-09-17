@@ -17,6 +17,10 @@ ROOT = Path(__file__).resolve().parent
 BUILD_ROOT = Path.home() / ".local/share/kb/builds"
 
 
+def file_argument(value):
+    return store.jsonl_filename(value if value.endswith(".jsonl") else value + ".jsonl")
+
+
 def rebuild(name, info, commit, config):
     build_root = BUILD_ROOT / name / uuid.uuid4().hex
     build_root.mkdir(parents=True)
@@ -162,8 +166,8 @@ def main(argv=None):
     codex.add_argument("--prompt")
     codex.add_argument("--remote", action="store_true", help="号池にKBを登録し、推論時だけ挿入する")
     for command in (creation, publish, codex):
-        command.add_argument("--file", default="latest.jsonl", type=store.jsonl_filename,
-                             help="保存・利用するJSONLのファイル名（既定: latest.jsonl、同名は上書き）")
+        command.add_argument("--file", default="latest.jsonl", type=file_argument,
+                             help="保存・利用するJSONLのファイル名（.jsonlは省略可、既定: latest.jsonl、同名は上書き）")
     args = parser.parse_args(argv)
     config = store.read_config()
     if args.command == "register":
