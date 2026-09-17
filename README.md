@@ -76,6 +76,35 @@ kb list
 
 ## Gitに保存したKBを `kb codex` で開く
 
+### 号池から推論時だけKBを挿入する
+
+```bash
+kb codex octane --remote
+kb codex octane --remote --file v1.00.jsonl --store work
+kb codex octane --remote --session-only --rebuild never
+```
+
+`--remote` は、KBを号池に登録して新しいネイティブCodexセッションへ紐付ける。
+KB本体をローカルのCodex履歴に入れず、号池が推論要求の先頭のsystem/developer項目の後へ挿入する。
+会話のcompaction blobがある場合も、その前に置く。コンパクト要求にはKBを含めない。
+サブエージェントは通信上の親セッション情報を通して同じKBを継承する。
+
+登録するのはJSONL内の全 `response_item`。複数の独立blobとKB憲章の順序を保つ。
+起動時にその内容を固定するため、あとで `latest.jsonl` を更新しても稼働中のセッションは変わらない。
+Gitの更新確認・再作成の質問・再作成しない場合の差分追加は、通常の `kb codex` と共通。
+`--app`、`--session-only`、`--prompt`、`--file` も併用できる。
+
+接続には既存の `~/.config/kb/config.json` の `build_args` にある `--origin`、`--key-file`、
+必要なら `--private-http` を使う。既存の `KB_POOL_*` でも指定でき、Codexの環境変数を設定することはない。
+新しい接続設定は不要。**Macの透過ブリッジが同じ号池へ接続していること**と、
+Remote KB対応版の `codex-account-pool` が必要。登録エラーの場合、最初のターンは送信しない。
+
+起動直後の先行WebSocket接続を残さないため、空セッションの作成・登録・保存後にapp-serverを
+一度終了し、同じセッションを再開して最初のターンを送る。Codexの設定・認証・バイナリは変更しない。
+号池側の詳細: `https://github.com/yukimaru77/codex-account-pool/blob/main/docs/remote-kb.md`
+
+### 通常のローカルKB
+
 ```bash
 bash install.sh
 kb store add work https://github.com/your-account/kb-store.git

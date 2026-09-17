@@ -105,8 +105,12 @@ def launch(args, config):
     else:
         print("KBは基準ブランチと同じcommitです。", flush=True)
     workspace = Path(args.workspace).expanduser().resolve()
+    options = {}
+    if getattr(args, "remote", False):
+        from kb_remote import RemoteKB
+        options["remote"] = RemoteKB(config, jsonl)
     session_id = kb_codex.start_session(jsonl, workspace, args.name, context,
-                                        full_access=not args.no_yolo, prompt=args.prompt)
+                                        full_access=not args.no_yolo, prompt=args.prompt, **options)
     print(f"session: {session_id}", flush=True)
     if args.session_only:
         return session_id
@@ -156,6 +160,7 @@ def main(argv=None):
     mode.add_argument("--app", action="store_true")
     codex.add_argument("--no-yolo", action="store_true")
     codex.add_argument("--prompt")
+    codex.add_argument("--remote", action="store_true", help="号池にKBを登録し、推論時だけ挿入する")
     for command in (creation, publish, codex):
         command.add_argument("--file", default="latest.jsonl", type=store.jsonl_filename,
                              help="保存・利用するJSONLのファイル名（既定: latest.jsonl、同名は上書き）")

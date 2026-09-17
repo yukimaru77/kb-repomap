@@ -76,6 +76,18 @@ class CodexAppServer:
             params.update(sandbox="danger-full-access", approvalPolicy="never")
         return self.request("thread/fork", params)["thread"]["id"]
 
+    def start(self, workspace, full_access):
+        params = {"cwd": str(workspace), "ephemeral": False}
+        if full_access:
+            params.update(sandbox="danger-full-access", approvalPolicy="never")
+        return self.request("thread/start", params)["thread"]["id"]
+
+    def resume(self, session_id, workspace, full_access):
+        params = {"threadId": session_id, "cwd": str(workspace)}
+        if full_access:
+            params.update(sandbox="danger-full-access", approvalPolicy="never")
+        return self.request("thread/resume", params)["thread"]["id"]
+
     def run_turn(self, session_id, prompt, workspace):
         completed = None
         answer = ""
@@ -115,9 +127,20 @@ class CodexAppServer:
         self.process.stdout.close()
 
 
-def start_session(jsonl, workspace, name, update_context, *, full_access=True, prompt=None):
+def start_session(jsonl, workspace, name, update_context, *, full_access=True, prompt=None, remote=None):
+    if remote is not None:
+        # thread/start may open a prewarm socket before returning its ID.
+        # Register, persist the new empty thread, then close this app-server so
+        # the first user turn opens a socket with the binding already in place.
+        with CodexAppServer() as bootstrap:
+            session_id = bootstrap.start(workspace, full_access)
+            remote.bind(session_id)
+            bootstrap.request("thread/name/set", {"threadId": session_id, "name": f"{name} Remote KBを活用する"})
     with CodexAppServer() as server:
-        session_id = server.fork(jsonl, workspace, full_access)
+        if remote is None:
+            session_id = server.fork(jsonl, workspace, full_access)
+        else:
+            server.resume(session_id, workspace, full_access)
         # Submit updates AFTER the fork: an unfinished trailing user message in
         # a synthetic template can be omitted by Codex's fork snapshot boundary.
         instruction = prompt or "今まで読んだ内容をふんだんに活用してください。"
