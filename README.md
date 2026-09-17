@@ -17,6 +17,10 @@ Python 3.12と依存関係をプロジェクト専用環境へ用意します。
 map/blob生成には不要です。初回のパッケージ・tiktoken辞書取得にはネットワークを使いますが、
 map生成自体にLLM呼び出しやAPIキーは不要です。
 
+**初めてKBを作るPCでは、先に `~/.config/kb/config.json` に号池の接続先とキーファイルの
+場所を設定してください。** [初回の設定手順](#作成再作成時の接続先とオプション)は下記にあります。
+インストーラーはAPIの接続先・キーを自動設定しません。
+
 ## 基本の4コマンド
 
 ```bash
@@ -126,16 +130,42 @@ kb publish octane --store work \
 `kb create` と起動時の再作成で使用するビルダーの引数は、同ファイルの `build_args` で指定します。
 キー本体は設定や保存先リポジトリに入れず、ローカルのキーファイルを指定してください。
 
+**初回は各PCで次の設定を行ってください。**
+
+1. 設定ディレクトリを作ります。
+
+   ```bash
+   mkdir -p "$HOME/.config/kb"
+   chmod 700 "$HOME/.config/kb"
+   ```
+
+2. 号池のクライアントAPIキーを `~/.config/kb/client.key` に保存し、
+   `chmod 600 "$HOME/.config/kb/client.key"` を実行します。
+   ファイルの内容はキー本体だけです。
+3. `~/.config/kb/config.json` をエディターで作成し、下の例の
+   `https://your-pool.example` を実際の号池URLへ置き換えます。
+   URLの末尾には `/v1` や `/_pool/rr` を付けません。
+   すでにファイルがある場合は、既存の `stores` を残したまま `build_args` を追加・編集します。
+
 ```json
 {
-  "stores": [{"name": "work", "url": "https://github.com/your-account/kb-store.git"}],
+  "stores": [],
   "build_args": [
     "--origin", "https://your-pool.example",
-    "--key-file", "/path/to/pool-client.key",
+    "--key-file", "~/.config/kb/client.key",
     "--workers", "12"
   ]
 }
 ```
+
+その後 `kb register` または `kb store add <名前> <保存先Git URL>` で保存先を登録します。
+これらのコマンドが設定するのは保存先の情報で、号池への接続設定は上記で用意します。
+
+Tailscaleなどの確認済み私設トンネル内でHTTPを使う場合は、`--origin` にそのHTTP URLを指定し、
+`build_args` の要素として `"--private-http"` も追加してください。
+
+この `config.json` とキーファイルはリポジトリの外に置くため、Gitの管理対象に含まれません。
+リポジトリに載せているのは設定例だけです。別のPCで使う際にも、そのPCの接続先とキーを設定します。
 
 読解指示・API指示・共通マップ・二次圧縮オプションも `build_args` で指定できます。
 未指定時は作成器の既定値を使います。元KBに使った独自の作成オプションを維持したい場合は、
