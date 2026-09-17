@@ -55,6 +55,25 @@ kb codex xx      # KB入りの新規Codexセッションを開く
 作成には下記の `build_args` または `KB_POOL_*` による圧縮API接続先の設定が必要です。
 `kb list` では未作成KBを「未作成」と表示します。作成後は同じ名前で `kb codex xx` を使えます。
 
+### JSONLの保存名を指定する
+
+`--file` で `latest.jsonl` 以外の名前を指定できます。省略時は従来どおり `latest.jsonl`。
+
+```bash
+kb create octane --file v1.00.jsonl
+kb codex octane --file v1.00.jsonl
+kb list
+```
+
+同じ名前で再作成すると、そのJSONLと作成情報を上書きしてcommit/pushします。
+別名のファイルや `latest.jsonl` は変更しません。`--file` にはパスを含まない `.jsonl` の
+ファイル名を指定します。空白を含む名前は引用符で囲みます。
+
+`kb list` はファイルごとに、KB名・保存先・作成commit・基準ブランチ・ファイル名を表示します。
+別名だけを作成した場合、`latest.jsonl` の行は「未作成」のままです。
+`kb codex --file ...` の起動時も、そのファイルの作成commitから差分を確認します。
+再作成を選んだ場合は同じファイル名を更新します。指定したファイルがなければエラーになります。
+
 ## Gitに保存したKBを `kb codex` で開く
 
 ```bash
@@ -72,15 +91,18 @@ kb codex octane
 同名で再登録すると接続先を更新し、`kb store remove <名前>` でローカルの登録を取り除きます。
 
 保存先は登録順に検索します。同名KBが複数ある場合は最初のものを使い、
-`kb codex octane --store work` で保存先を指定できます。配置は次の2ファイルです。
+`kb codex octane --store work` で保存先を指定できます。
+既定の配置は `info.json` と `latest.jsonl`。別名保存ではJSONLごとに作成情報を持ちます。
 
 ```text
 octane/
   info.json
   latest.jsonl
+  v1.00.info.json  # --file v1.00.jsonl で保存したKBの作成情報
+  v1.00.jsonl
 ```
 
-`info.json`:
+`info.json`（別名保存の `v1.00.info.json` も同じ形式）:
 
 ```json
 {
@@ -91,12 +113,13 @@ octane/
 ```
 
 名前はディレクトリ名、session IDはJSONL先頭の `session_meta.id` から取得します。
-`latest.jsonl` の複数blob・型・未知のフィールドはそのまま保存します。
-新しいKBを保存すると2ファイルを同じcommitで更新し、過去版はGit履歴に残ります。
+各JSONLの複数blob・型・未知のフィールドはそのまま保存します。
+JSONLと対応する作成情報を同じcommitで更新し、過去版はGit履歴に残ります。
 
 起動時の流れ:
 
-1. 保存先Gitリポジトリをfetchし、同じcommitにある `info.json` と `latest.jsonl` を取得。
+1. 保存先Gitリポジトリをfetchし、同じcommitにある指定JSONLと対応する作成情報を取得。
+   省略時は `info.json` と `latest.jsonl`。
 2. 元リポジトリの基準ブランチをfetchし、KB作成時commitと比較。
 3. commitが異なる場合に「KBを作り直しますか？ [y/N]」と質問。
    - **Yes**: 既存のrepo-map/v2圧縮処理でその時点のHEADから作り直し、選択された保存先にcommit/push。
@@ -127,6 +150,9 @@ kb publish octane --store work \
   --source-commit <完全なSHA> --branch main \
   --jsonl /path/to/rollout-....jsonl
 ```
+
+`--jsonl` は読み込むローカルファイル、`--file v1.00.jsonl` は保存先でのファイル名です。
+`--file` を省略すると `latest.jsonl` に保存します。同名なら上書きします。
 
 ### 作成・再作成時の接続先とオプション
 

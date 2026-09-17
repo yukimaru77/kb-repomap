@@ -94,6 +94,143 @@ class GitStoreTest(unittest.TestCase):
         self.assertIn("+new value", context)
         self.assertEqual(kb_store.source_update({**self.info, "source_commit": head}), (head, ""))
 
+    def test_named_jsonl_overwrite_preserves_latest_other_files_and_git_history(self):
+        original = self.jsonl.read_bytes()
+        latest_info = {**self.info, "source_commit": self.head}
+        kb_store.publish(self.store1, "example", latest_info, self.jsonl)
+        first = kb_store.publish(self.store1, "example", self.info, self.jsonl, filename="v1.00.jsonl")
+        kb_store.publish(self.store1, "example", self.info, self.jsonl, filename="v2.00.jsonl")
+        before = kb_store.find_kb(self.config, "example", filename="v1.00.jsonl")
+        self.assertEqual(before["info"], self.info)
+        self.assertEqual(before["jsonl"].name, "v1.00.jsonl")
+        self.assertEqual(before["jsonl"].stat().st_mode & 0o777, 0o600)
+        replacement = original + b'\n'
+        self.jsonl.write_bytes(replacement)
+        updated = kb_store.publish(self.store1, "example", latest_info, self.jsonl, filename="v1.00.jsonl")
+        loaded = kb_store.find_kb(self.config, "example", filename="v1.00.jsonl")
+        self.assertEqual(loaded["info"], latest_info)
+        self.assertEqual(loaded["jsonl"].read_bytes(), replacement)
+        self.assertEqual(before["jsonl"].read_bytes(), original)
+        self.assertEqual(kb_store.find_kb(self.config, "example")["jsonl"].read_bytes(), original)
+        self.assertEqual(kb_store.find_kb(self.config, "example")["info"], latest_info)
+        self.assertEqual(kb_store.find_kb(self.config, "example", filename="v2.00.jsonl")["jsonl"].read_bytes(), original)
+        self.assertEqual(kb_store.git(self.store1["url"], "show", f"{first}:example/v1.00.jsonl", text=False).stdout, original)
+        self.assertEqual(kb_store.git(self.store1["url"], "diff-tree", "--no-commit-id", "--name-only", "-r", updated).stdout.splitlines(),
+                         ["example/v1.00.info.json", "example/v1.00.jsonl"])
+
+    def test_named_lookup_uses_matching_file_and_explicit_store(self):
+        kb_store.publish(self.store1, "example", self.info, self.jsonl)
+        kb_store.publish(self.store2, "example", self.info, self.jsonl, filename="v1.00.jsonl")
+        self.assertEqual(kb_store.find_kb(self.config, "example", filename="v1.00.jsonl")["store"], self.store2)
+        kb_store.publish(self.store1, "example", self.info, self.jsonl, filename="v1.00.jsonl")
+        self.assertEqual(kb_store.find_kb(self.config, "example", filename="v1.00.jsonl")["store"], self.store1)
+        self.assertEqual(kb_store.find_kb(self.config, "example", "second", filename="v1.00.jsonl")["store"], self.store2)
+
+    def test_create_named_kb_from_registration_and_list_each_file(self):
+        kb_store.write_config(self.config)
+        registration = {**self.info, "source_commit": None}
+        kb_store.publish(self.store2, "example", registration, create_only=True)
+        with mock.patch.object(kb_cli, "rebuild", return_value=self.jsonl) as rebuild, \
+             contextlib.redirect_stdout(io.StringIO()):
+            kb_cli.main(["create", "example", "--file", "v1.00.jsonl", "--store", "second"])
+        rebuild.assert_called_once_with("example", registration, self.head, self.config)
+        loaded = kb_store.find_kb(self.config, "example", "second", filename="v1.00.jsonl")
+        self.assertEqual(loaded["info"]["source_commit"], self.head)
+        self.assertEqual(loaded["jsonl"].read_bytes(), self.jsonl.read_bytes())
+        self.assertEqual(kb_store.find_kb(self.config, "example", "second", download=False)["info"], registration)
+        self.assertNotEqual(kb_store.git(self.store2["url"], "cat-file", "-e", "main:example/latest.jsonl", check=False).returncode, 0)
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            kb_cli.main(["list"])
+        self.assertIn(f"example\tsecond\t{self.head[:12]}\tmain\tv1.00.jsonl", output.getvalue())
+        self.assertIn("example\tsecond\t未作成\tmain\tlatest.jsonl", output.getvalue())
+        with mock.patch.object(kb_cli, "rebuild", return_value=self.jsonl), contextlib.redirect_stdout(io.StringIO()):
+            kb_cli.main(["create", "example", "--store", "second"])
+        self.assertEqual(kb_store.find_kb(self.config, "example", "second")["jsonl"].read_bytes(), self.jsonl.read_bytes())
+        self.assertEqual(kb_store.find_kb(self.config, "example", "second", filename="v1.00.jsonl")["info"], loaded["info"])
+
+    def test_publish_named_file_from_cli_creates_registration_and_preserves_input(self):
+        kb_store.write_config(self.config)
+        original = self.jsonl.read_bytes()
+        with contextlib.redirect_stdout(io.StringIO()):
+            kb_cli.main(["publish", "example", "--file", "検証 v1.00.jsonl", "--store", "second",
+                         "--repository-url", str(self.source), "--source-commit", self.base,
+                         "--branch", "main", "--jsonl", str(self.jsonl)])
+        loaded = kb_store.find_kb(self.config, "example", "second", filename="検証 v1.00.jsonl")
+        self.assertEqual(loaded["info"], self.info)
+        self.assertEqual(loaded["jsonl"].read_bytes(), original)
+        self.assertEqual(self.jsonl.read_bytes(), original)
+        self.assertEqual(kb_store.find_kb(self.config, "example", "second", download=False)["info"],
+                         {**self.info, "source_commit": None})
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            kb_cli.main(["list"])
+        self.assertIn(f"example\tsecond\t{self.base[:12]}\tmain\t検証 v1.00.jsonl", output.getvalue())
+
+    def test_codex_named_file_checks_its_own_commit(self):
+        kb_store.write_config(self.config)
+        kb_store.publish(self.store1, "example", self.info, self.jsonl)
+        kb_store.publish(self.store1, "example", {**self.info, "source_commit": self.head}, self.jsonl, filename="v1.00.jsonl")
+        with mock.patch("builtins.input") as question, \
+             mock.patch.object(kb_cli, "rebuild") as rebuild, \
+             mock.patch.object(kb_codex, "start_session", return_value="new-id") as start, \
+             contextlib.redirect_stdout(io.StringIO()):
+            kb_cli.main(["codex", "example", "--file", "v1.00.jsonl", "--session-only"])
+        question.assert_not_called()
+        rebuild.assert_not_called()
+        self.assertEqual(start.call_args.args[0].name, "v1.00.jsonl")
+        self.assertEqual(start.call_args.args[0].read_bytes(), self.jsonl.read_bytes())
+        self.assertEqual(start.call_args.args[3], "")
+
+    def test_named_rebuild_updates_selected_file_and_preserves_latest(self):
+        original = self.jsonl.read_bytes()
+        latest_info = {**self.info, "source_commit": self.head}
+        kb_store.publish(self.store1, "example", latest_info, self.jsonl)
+        kb_store.publish(self.store1, "example", self.info, self.jsonl, filename="v1.00.jsonl")
+        self.jsonl.write_bytes(original + b'\n')
+        with mock.patch.object(kb_cli, "rebuild", return_value=self.jsonl) as rebuild, \
+             mock.patch.object(kb_codex, "start_session", return_value="new-id") as start, \
+             contextlib.redirect_stdout(io.StringIO()):
+            kb_cli.launch(self.args("always", "v1.00.jsonl"), self.config)
+        rebuild.assert_called_once_with("example", self.info, self.head, self.config)
+        self.assertEqual(start.call_args.args[3], "")
+        named = kb_store.find_kb(self.config, "example", filename="v1.00.jsonl")
+        self.assertEqual(named["info"]["source_commit"], self.head)
+        self.assertEqual(named["jsonl"].read_bytes(), self.jsonl.read_bytes())
+        latest = kb_store.find_kb(self.config, "example")
+        self.assertEqual(latest["info"], latest_info)
+        self.assertEqual(latest["jsonl"].read_bytes(), original)
+
+    def test_named_kb_diff_uses_named_commit_without_publishing(self):
+        kb_store.publish(self.store1, "example", {**self.info, "source_commit": self.head}, self.jsonl)
+        revision = kb_store.publish(self.store1, "example", self.info, self.jsonl, filename="v1.00.jsonl")
+        with mock.patch.object(kb_cli, "rebuild") as rebuild, \
+             mock.patch.object(kb_codex, "start_session", return_value="new-id") as start, \
+             contextlib.redirect_stdout(io.StringIO()):
+            kb_cli.launch(self.args("never", "v1.00.jsonl"), self.config)
+        rebuild.assert_not_called()
+        self.assertEqual(start.call_args.args[0].name, "v1.00.jsonl")
+        self.assertIn("-old value", start.call_args.args[3])
+        self.assertIn("+new value", start.call_args.args[3])
+        self.assertEqual(kb_store.find_kb(self.config, "example")["store_revision"], revision)
+
+    def test_missing_named_file_does_not_start_latest_instead(self):
+        kb_store.write_config(self.config)
+        kb_store.publish(self.store1, "example", self.info, self.jsonl)
+        with mock.patch.object(kb_codex, "start_session") as start:
+            with self.assertRaisesRegex(ValueError, "v1.00.jsonl"):
+                kb_cli.main(["codex", "example", "--file", "v1.00.jsonl", "--session-only"])
+        start.assert_not_called()
+
+    def test_filename_cannot_escape_kb_directory_or_overwrite_metadata(self):
+        for filename in ("../outside.jsonl", "/tmp/out.jsonl", "sub/path.jsonl", "sub\\path.jsonl", "info.json", ".jsonl", ""):
+            with self.subTest(filename=filename), mock.patch.object(kb_store, "default_branch") as branch:
+                with self.assertRaises(ValueError):
+                    kb_store.publish(self.store1, "example", self.info, self.jsonl, filename=filename)
+                with self.assertRaises(ValueError):
+                    kb_store.find_kb(self.config, "example", filename=filename)
+                branch.assert_not_called()
+
     def test_config_add_update_remove_and_list_kbs(self):
         with contextlib.redirect_stdout(io.StringIO()):
             kb_cli.main(["store", "add", "first", self.store1["url"]])
@@ -202,9 +339,9 @@ class GitStoreTest(unittest.TestCase):
         self.assertEqual(loaded["info"], info)
         self.assertEqual(loaded["store_revision"], revision)
 
-    def args(self, rebuild="ask"):
+    def args(self, rebuild="ask", filename="latest.jsonl"):
         return SimpleNamespace(name="example", store=None, rebuild=rebuild, workspace=str(self.root),
-                               no_yolo=False, session_only=True, app=False, prompt=None)
+                               no_yolo=False, session_only=True, app=False, prompt=None, file=filename)
 
     def test_decline_rebuild_sends_diff_to_new_session_without_publishing(self):
         revision = kb_store.publish(self.store2, "example", self.info, self.jsonl)

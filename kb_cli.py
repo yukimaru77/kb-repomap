@@ -80,25 +80,25 @@ def register(args, config):
     print(f"作成: kb create {name} --store {selected['name']}")
 
 
-def create_kb(name, loaded, commit, config):
+def create_kb(name, loaded, commit, config, filename="latest.jsonl"):
     print(f"KBを作成します: {name}@{commit} / store: {loaded['store']['name']}", flush=True)
     jsonl = rebuild(name, loaded["info"], commit, config)
     info = {**loaded["info"], "source_commit": commit}
-    revision = store.publish(loaded["store"], name, info, jsonl)
-    print(f"KBを作成・保存しました: {revision}", flush=True)
+    revision = store.publish(loaded["store"], name, info, jsonl, filename=filename)
+    print(f"KBを作成・保存しました: {name}/{filename} / {revision}", flush=True)
     return jsonl
 
 
 def launch(args, config):
-    loaded = store.find_kb(config, args.name, args.store)
+    loaded = store.find_kb(config, args.name, args.store, filename=args.file)
     info, jsonl = loaded["info"], loaded["jsonl"]
-    print(f"KB: {args.name} / store: {loaded['store']['name']}", flush=True)
+    print(f"KB: {args.name}/{args.file} / store: {loaded['store']['name']}", flush=True)
     print(f"source: {info['repository_url']}@{info['source_commit']}", flush=True)
     head, context = store.source_update(info)
     if context:
         print(f"branch: {info['branch']} / KB: {info['source_commit'][:12]} → HEAD: {head[:12]}", flush=True)
         if should_rebuild(args.rebuild):
-            jsonl = create_kb(args.name, loaded, head, config)
+            jsonl = create_kb(args.name, loaded, head, config, args.file)
             context = ""
         else:
             print(f"再作成せず更新差分を追加します: {len(context.encode()):,} bytes", flush=True)
@@ -156,13 +156,16 @@ def main(argv=None):
     mode.add_argument("--app", action="store_true")
     codex.add_argument("--no-yolo", action="store_true")
     codex.add_argument("--prompt")
+    for command in (creation, publish, codex):
+        command.add_argument("--file", default="latest.jsonl", type=store.jsonl_filename,
+                             help="保存・利用するJSONLのファイル名（既定: latest.jsonl、同名は上書き）")
     args = parser.parse_args(argv)
     config = store.read_config()
     if args.command == "register":
         register(args, config)
     elif args.command == "create":
         loaded = store.find_kb(config, args.name, args.store, download=False)
-        create_kb(args.name, loaded, store.source_head(loaded["info"]), config)
+        create_kb(args.name, loaded, store.source_head(loaded["info"]), config, args.file)
     elif args.command == "store":
         entries = config.setdefault("stores", [])
         if args.action == "add":
@@ -183,15 +186,17 @@ def main(argv=None):
     elif args.command == "list":
         for entry in store.configured_stores(config, args.store):
             repo, revision, _ = store.sync_store(entry)
-            for filename in store.git(repo, "ls-tree", "-r", "--name-only", revision).stdout.splitlines():
-                if filename.count("/") == 1 and filename.endswith("/info.json"):
+            for filename in store.git(repo, "ls-tree", "-r", "--name-only", "-z", revision).stdout.split("\0"):
+                if filename.count("/") == 1 and (filename.endswith("/info.json") or filename.endswith(".info.json")):
                     info = json.loads(store.git(repo, "show", f"{revision}:{filename}").stdout)
                     commit = info.get("source_commit")
-                    print(f"{filename.split('/')[0]}\t{entry['name']}\t{commit[:12] if commit else '未作成'}\t{info['branch']}")
+                    name, metadata = filename.split("/")
+                    jsonl_name = "latest.jsonl" if metadata == "info.json" else metadata.removesuffix(".info.json") + ".jsonl"
+                    print(f"{name}\t{entry['name']}\t{commit[:12] if commit else '未作成'}\t{info['branch']}\t{jsonl_name}")
     elif args.command == "publish":
         info = {"repository_url": args.repository_url, "source_commit": args.source_commit, "branch": args.branch}
         selected = store.configured_stores(config, args.store)[0]
-        print(store.publish(selected, args.name, info, args.jsonl))
+        print(store.publish(selected, args.name, info, args.jsonl, filename=args.file))
     elif args.command == "codex":
         launch(args, config)
 

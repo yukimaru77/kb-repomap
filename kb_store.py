@@ -26,6 +26,18 @@ def name_value(value):
     return value
 
 
+def jsonl_filename(value):
+    if (not value.endswith(".jsonl") or len(value) <= len(".jsonl")
+            or any(char in value for char in ("/", "\\", "\0"))):
+        raise ValueError("保存名にはディレクトリを含まない .jsonl ファイル名を指定してください")
+    return value
+
+
+def info_filename(filename):
+    jsonl_filename(filename)
+    return "info.json" if filename == "latest.jsonl" else filename.removesuffix(".jsonl") + ".info.json"
+
+
 def read_config():
     return json.loads(CONFIG.read_text()) if CONFIG.exists() else {"stores": []}
 
@@ -73,26 +85,27 @@ def sync_store(store):
     return repo, revision, branch
 
 
-def find_kb(config, name, selected=None, *, download=True):
+def find_kb(config, name, selected=None, *, download=True, filename="latest.jsonl"):
     name_value(name)
+    metadata = info_filename(filename)
     for store in configured_stores(config, selected):
         repo, revision, branch = sync_store(store)
-        found = git(repo, "cat-file", "-e", f"{revision}:{name}/info.json", check=False)
+        found = git(repo, "cat-file", "-e", f"{revision}:{name}/{metadata}", check=False)
         if found.returncode:
             continue
-        info = json.loads(git(repo, "show", f"{revision}:{name}/info.json").stdout)
+        info = json.loads(git(repo, "show", f"{revision}:{name}/{metadata}").stdout)
         destination = None
         if download:
             if not info.get("source_commit"):
                 raise ValueError(f"KBは登録済みですが未作成です。kb create {name} で作成してください")
-            raw = git(repo, "show", f"{revision}:{name}/latest.jsonl", text=False).stdout
-            destination = CACHE / "downloads" / repo.stem / revision / name / "latest.jsonl"
+            raw = git(repo, "show", f"{revision}:{name}/{filename}", text=False).stdout
+            destination = CACHE / "downloads" / repo.stem / revision / name / filename
             destination.parent.mkdir(parents=True, exist_ok=True)
             destination.write_bytes(raw)
             destination.chmod(0o600)
         return {"store": store, "store_revision": revision, "store_branch": branch,
                 "info": info, "jsonl": destination}
-    raise ValueError(f"KBが見つかりません: {name}")
+    raise ValueError(f"KBが見つかりません: {name} / {filename}")
 
 
 def source_head(info):
@@ -125,9 +138,10 @@ def source_update(info):
     return head, context
 
 
-def publish(store, name, info, jsonl=None, *, create_only=False):
+def publish(store, name, info, jsonl=None, *, create_only=False, filename="latest.jsonl"):
     """Commit registration or a complete KB; concurrent Git pushes stay atomic."""
     name_value(name)
+    metadata = info_filename(filename)
     branch = store.get("branch") or default_branch(store["url"])
     with tempfile.TemporaryDirectory(prefix="kb-publish-") as temporary:
         repo = Path(temporary) / "store"
@@ -137,15 +151,20 @@ def publish(store, name, info, jsonl=None, *, create_only=False):
         if create_only and (directory / "info.json").exists():
             raise ValueError(f"KBは登録済みです: {name} / store: {store['name']}")
         directory.mkdir(exist_ok=True)
-        (directory / "info.json").write_text(json.dumps(info, ensure_ascii=False, indent=2) + "\n")
-        files = [f"{name}/info.json"]
+        files = []
+        if filename != "latest.jsonl" and not (directory / "info.json").exists():
+            registration = {**info, "source_commit": None}
+            (directory / "info.json").write_text(json.dumps(registration, ensure_ascii=False, indent=2) + "\n")
+            files.append(f"{name}/info.json")
+        (directory / metadata).write_text(json.dumps(info, ensure_ascii=False, indent=2) + "\n")
+        files.append(f"{name}/{metadata}")
         if jsonl is not None:
-            (directory / "latest.jsonl").write_bytes(Path(jsonl).read_bytes())
-            files.append(f"{name}/latest.jsonl")
+            (directory / filename).write_bytes(Path(jsonl).read_bytes())
+            files.append(f"{name}/{filename}")
         git(repo, "add", "--", *files)
         if git(repo, "diff", "--cached", "--quiet", check=False).returncode == 0:
             return git(repo, "rev-parse", "HEAD").stdout.strip()
-        message = (f"Update {name} KB at {info['source_commit'][:12]}"
+        message = (f"Update {name}/{filename} KB at {info['source_commit'][:12]}"
                    if info.get("source_commit") else f"Register {name} KB")
         git(repo, "commit", "--quiet", "-m", message)
         git(repo, "push", "--quiet", "origin", f"HEAD:refs/heads/{branch}")
