@@ -25,7 +25,7 @@ map生成自体にLLM呼び出しやAPIキーは不要です。
 
 ```bash
 bash install.sh
-kb register xx   # 対話で登録。kb 登録 xx でも同じ
+kb register xx   # 対話で登録
 kb create xx     # 基準ブランチからKBを作成し、保存先へcommit/push
 kb list          # 登録済みKBと作成状態を一覧表示
 kb codex xx      # KB入りの新規Codexセッションを開く
@@ -37,6 +37,10 @@ kb codex xx      # KB入りの新規Codexセッションを開く
 2. 元リポジトリのURL
 3. 基準ブランチ（既定: `main`）
 4. 保存先GitリポジトリのURL（登録済みの保存先があれば表示）
+
+**自分専用の保存先には、プライベートリポジトリを作成して使うことをおすすめします。**
+初回commitと既定ブランチを用意してから、そのURLを指定してください
+（GitHubなら作成時にREADMEを追加すると用意できます）。
 
 保存先には既存のGitリポジトリを指定します。新しいURLならローカルの保存先一覧にも登録し、
 同じURLを登録済みならその設定を使います。登録時は `<KB名>/info.json` を保存し、

@@ -113,7 +113,7 @@ class GitStoreTest(unittest.TestCase):
         with mock.patch("builtins.input", side_effect=["example", str(self.source), "feature/kb", self.store2["url"]]) as prompt, \
              mock.patch.object(kb_cli, "rebuild") as rebuild, \
              contextlib.redirect_stdout(io.StringIO()):
-            kb_cli.main(["登録"])
+            kb_cli.main(["register"])
         self.assertEqual([call.args[0] for call in prompt.call_args_list],
                          ["KB名: ", "元リポジトリのURL: ", "基準ブランチ [main]: ", "保存先GitリポジトリのURL: "])
         config = kb_store.read_config()

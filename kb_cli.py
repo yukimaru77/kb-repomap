@@ -59,6 +59,7 @@ def register(args, config):
     entries = config.setdefault("stores", [])
     for entry in entries:
         print(f"保存先 {entry['name']}: {entry['url']}")
+    print("自分専用の保存先には、プライベートリポジトリを作成して使うことをおすすめします。")
     url = prompt_value("保存先GitリポジトリのURL", entries[0]["url"] if entries else None)
     selected = next((entry for entry in entries if entry["url"] == url), None)
     if selected is None:
@@ -122,7 +123,7 @@ def launch(args, config):
 def main(argv=None):
     parser = argparse.ArgumentParser(prog="kb")
     commands = parser.add_subparsers(dest="command", required=True)
-    registration = commands.add_parser("register", aliases=["登録"], help="URL・ブランチ・保存先を対話登録")
+    registration = commands.add_parser("register", help="URL・ブランチ・保存先を対話登録")
     registration.add_argument("name", nargs="?", type=store.name_value, help="KB名（省略すると質問）")
     creation = commands.add_parser("create", help="登録済みKBを基準ブランチから作成・保存")
     creation.add_argument("name", type=store.name_value)
@@ -157,7 +158,7 @@ def main(argv=None):
     codex.add_argument("--prompt")
     args = parser.parse_args(argv)
     config = store.read_config()
-    if args.command in {"register", "登録"}:
+    if args.command == "register":
         register(args, config)
     elif args.command == "create":
         loaded = store.find_kb(config, args.name, args.store, download=False)
