@@ -73,7 +73,7 @@ def sync_store(store):
     return repo, revision, branch
 
 
-def find_kb(config, name, selected=None):
+def find_kb(config, name, selected=None, *, download=True):
     name_value(name)
     for store in configured_stores(config, selected):
         repo, revision, branch = sync_store(store)
@@ -81,22 +81,31 @@ def find_kb(config, name, selected=None):
         if found.returncode:
             continue
         info = json.loads(git(repo, "show", f"{revision}:{name}/info.json").stdout)
-        raw = git(repo, "show", f"{revision}:{name}/latest.jsonl", text=False).stdout
-        destination = CACHE / "downloads" / repo.stem / revision / name / "latest.jsonl"
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        destination.write_bytes(raw)
-        destination.chmod(0o600)
+        destination = None
+        if download:
+            if not info.get("source_commit"):
+                raise ValueError(f"KBは登録済みですが未作成です。kb create {name} で作成してください")
+            raw = git(repo, "show", f"{revision}:{name}/latest.jsonl", text=False).stdout
+            destination = CACHE / "downloads" / repo.stem / revision / name / "latest.jsonl"
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            destination.write_bytes(raw)
+            destination.chmod(0o600)
         return {"store": store, "store_revision": revision, "store_branch": branch,
                 "info": info, "jsonl": destination}
     raise ValueError(f"KBが見つかりません: {name}")
 
 
-def source_update(info):
-    """Compare immutable commits using Git, including non-GitHub repositories."""
+def source_head(info):
     repo = cached_repo(info["repository_url"], "sources")
     git(repo, "fetch", "--quiet", "--no-tags", "origin",
         f"+refs/heads/{info['branch']}:refs/heads/target")
-    head = git(repo, "rev-parse", "refs/heads/target").stdout.strip()
+    return git(repo, "rev-parse", "refs/heads/target").stdout.strip()
+
+
+def source_update(info):
+    """Compare immutable commits using Git, including non-GitHub repositories."""
+    head = source_head(info)
+    repo = cached_repo(info["repository_url"], "sources")
     base = info["source_commit"]
     if base == head:
         return head, ""
@@ -116,8 +125,8 @@ def source_update(info):
     return head, context
 
 
-def publish(store, name, info, jsonl):
-    """Commit both files together; Git rejects concurrent non-fast-forward pushes."""
+def publish(store, name, info, jsonl=None, *, create_only=False):
+    """Commit registration or a complete KB; concurrent Git pushes stay atomic."""
     name_value(name)
     branch = store.get("branch") or default_branch(store["url"])
     with tempfile.TemporaryDirectory(prefix="kb-publish-") as temporary:
@@ -125,12 +134,19 @@ def publish(store, name, info, jsonl):
         run(["git", "clone", "--quiet", "--single-branch", "--branch", branch,
              "--", store["url"], str(repo)])
         directory = repo / name
+        if create_only and (directory / "info.json").exists():
+            raise ValueError(f"KBは登録済みです: {name} / store: {store['name']}")
         directory.mkdir(exist_ok=True)
         (directory / "info.json").write_text(json.dumps(info, ensure_ascii=False, indent=2) + "\n")
-        (directory / "latest.jsonl").write_bytes(Path(jsonl).read_bytes())
-        git(repo, "add", "--", f"{name}/info.json", f"{name}/latest.jsonl")
+        files = [f"{name}/info.json"]
+        if jsonl is not None:
+            (directory / "latest.jsonl").write_bytes(Path(jsonl).read_bytes())
+            files.append(f"{name}/latest.jsonl")
+        git(repo, "add", "--", *files)
         if git(repo, "diff", "--cached", "--quiet", check=False).returncode == 0:
             return git(repo, "rev-parse", "HEAD").stdout.strip()
-        git(repo, "commit", "--quiet", "-m", f"Update {name} KB at {info['source_commit'][:12]}")
+        message = (f"Update {name} KB at {info['source_commit'][:12]}"
+                   if info.get("source_commit") else f"Register {name} KB")
+        git(repo, "commit", "--quiet", "-m", message)
         git(repo, "push", "--quiet", "origin", f"HEAD:refs/heads/{branch}")
         return git(repo, "rev-parse", "HEAD").stdout.strip()

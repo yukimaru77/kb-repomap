@@ -4,6 +4,7 @@ import argparse
 import json
 import os
 from pathlib import Path
+import re
 import subprocess
 import sys
 import uuid
@@ -43,6 +44,50 @@ def should_rebuild(mode):
         return False
 
 
+def prompt_value(label, default=None):
+    suffix = f" [{default}]" if default else ""
+    value = input(f"{label}{suffix}: ").strip() or default
+    if not value:
+        raise ValueError(f"{label}を入力してください")
+    return value
+
+
+def register(args, config):
+    name = args.name or store.name_value(prompt_value("KB名"))
+    repository_url = prompt_value("元リポジトリのURL")
+    branch = prompt_value("基準ブランチ", "main")
+    entries = config.setdefault("stores", [])
+    for entry in entries:
+        print(f"保存先 {entry['name']}: {entry['url']}")
+    url = prompt_value("保存先GitリポジトリのURL", entries[0]["url"] if entries else None)
+    selected = next((entry for entry in entries if entry["url"] == url), None)
+    if selected is None:
+        base = re.sub(r"[^A-Za-z0-9._-]+", "-", url.rstrip("/").rsplit("/", 1)[-1]
+                      .rsplit(":", 1)[-1].removesuffix(".git")).strip(".-") or "store"
+        candidate = base
+        number = 2
+        while any(entry["name"] == candidate for entry in entries):
+            candidate = f"{base}-{number}"
+            number += 1
+        selected = {"name": candidate, "url": url}
+    info = {"repository_url": repository_url, "source_commit": None, "branch": branch}
+    revision = store.publish(selected, name, info, create_only=True)
+    if selected not in entries:
+        entries.append(selected)
+        store.write_config(config)
+    print(f"登録しました: {name} / store: {selected['name']} / {revision}")
+    print(f"作成: kb create {name} --store {selected['name']}")
+
+
+def create_kb(name, loaded, commit, config):
+    print(f"KBを作成します: {name}@{commit} / store: {loaded['store']['name']}", flush=True)
+    jsonl = rebuild(name, loaded["info"], commit, config)
+    info = {**loaded["info"], "source_commit": commit}
+    revision = store.publish(loaded["store"], name, info, jsonl)
+    print(f"KBを作成・保存しました: {revision}", flush=True)
+    return jsonl
+
+
 def launch(args, config):
     loaded = store.find_kb(config, args.name, args.store)
     info, jsonl = loaded["info"], loaded["jsonl"]
@@ -52,10 +97,7 @@ def launch(args, config):
     if context:
         print(f"branch: {info['branch']} / KB: {info['source_commit'][:12]} → HEAD: {head[:12]}", flush=True)
         if should_rebuild(args.rebuild):
-            jsonl = rebuild(args.name, info, head, config)
-            info = {**info, "source_commit": head}
-            revision = store.publish(loaded["store"], args.name, info, jsonl)
-            print(f"KBを更新・保存しました: {revision}", flush=True)
+            jsonl = create_kb(args.name, loaded, head, config)
             context = ""
         else:
             print(f"再作成せず更新差分を追加します: {len(context.encode()):,} bytes", flush=True)
@@ -80,6 +122,11 @@ def launch(args, config):
 def main(argv=None):
     parser = argparse.ArgumentParser(prog="kb")
     commands = parser.add_subparsers(dest="command", required=True)
+    registration = commands.add_parser("register", aliases=["登録"], help="URL・ブランチ・保存先を対話登録")
+    registration.add_argument("name", nargs="?", type=store.name_value, help="KB名（省略すると質問）")
+    creation = commands.add_parser("create", help="登録済みKBを基準ブランチから作成・保存")
+    creation.add_argument("name", type=store.name_value)
+    creation.add_argument("--store")
     stores = commands.add_parser("store", help="保存先Gitリポジトリを管理")
     actions = stores.add_subparsers(dest="action", required=True)
     add = actions.add_parser("add")
@@ -110,7 +157,12 @@ def main(argv=None):
     codex.add_argument("--prompt")
     args = parser.parse_args(argv)
     config = store.read_config()
-    if args.command == "store":
+    if args.command in {"register", "登録"}:
+        register(args, config)
+    elif args.command == "create":
+        loaded = store.find_kb(config, args.name, args.store, download=False)
+        create_kb(args.name, loaded, store.source_head(loaded["info"]), config)
+    elif args.command == "store":
         entries = config.setdefault("stores", [])
         if args.action == "add":
             entry = {"name": args.name, "url": args.url}
@@ -133,7 +185,8 @@ def main(argv=None):
             for filename in store.git(repo, "ls-tree", "-r", "--name-only", revision).stdout.splitlines():
                 if filename.count("/") == 1 and filename.endswith("/info.json"):
                     info = json.loads(store.git(repo, "show", f"{revision}:{filename}").stdout)
-                    print(f"{filename.split('/')[0]}\t{entry['name']}\t{info['source_commit'][:12]}\t{info['branch']}")
+                    commit = info.get("source_commit")
+                    print(f"{filename.split('/')[0]}\t{entry['name']}\t{commit[:12] if commit else '未作成'}\t{info['branch']}")
     elif args.command == "publish":
         info = {"repository_url": args.repository_url, "source_commit": args.source_commit, "branch": args.branch}
         selected = store.configured_stores(config, args.store)[0]
@@ -149,6 +202,6 @@ if __name__ == "__main__":
         detail = error.stderr or str(error)
         print(detail.decode(errors="replace") if isinstance(detail, bytes) else detail, file=sys.stderr)
         raise SystemExit(1)
-    except (ValueError, RuntimeError, OSError) as error:
+    except (ValueError, RuntimeError, OSError, EOFError) as error:
         print(f"kb: {error}", file=sys.stderr)
         raise SystemExit(1)

@@ -17,6 +17,36 @@ Python 3.12と依存関係をプロジェクト専用環境へ用意します。
 map/blob生成には不要です。初回のパッケージ・tiktoken辞書取得にはネットワークを使いますが、
 map生成自体にLLM呼び出しやAPIキーは不要です。
 
+## 基本の4コマンド
+
+```bash
+bash install.sh
+kb register xx   # 対話で登録。kb 登録 xx でも同じ
+kb create xx     # 基準ブランチからKBを作成し、保存先へcommit/push
+kb list          # 登録済みKBと作成状態を一覧表示
+kb codex xx      # KB入りの新規Codexセッションを開く
+```
+
+`kb register` は次を質問します。KB名を引数で渡した場合、名前の質問は省略します。
+
+1. KB名
+2. 元リポジトリのURL
+3. 基準ブランチ（既定: `main`）
+4. 保存先GitリポジトリのURL（登録済みの保存先があれば表示）
+
+保存先には既存のGitリポジトリを指定します。新しいURLならローカルの保存先一覧にも登録し、
+同じURLを登録済みならその設定を使います。登録時は `<KB名>/info.json` を保存し、
+`source_commit` は `null`（未作成）になります。登録だけでは推論APIを呼びません。
+既存の同名KBへの再登録は上書きせずエラーになります。
+
+`kb create xx` は登録されたURL・ブランチから、その時点のHEADを固定して作成します。
+成功すると `info.json` に作成commitを記録し、`latest.jsonl` と一緒にcommit/pushします。
+作成済みKBに実行すると作り直します。登録した保存先を指定する場合は
+`kb create xx --store <保存先名>` を使います。
+
+作成には下記の `build_args` または `KB_POOL_*` による圧縮API接続先の設定が必要です。
+`kb list` では未作成KBを「未作成」と表示します。作成後は同じ名前で `kb codex xx` を使えます。
+
 ## Gitに保存したKBを `kb codex` で開く
 
 ```bash
@@ -90,10 +120,10 @@ kb publish octane --store work \
   --jsonl /path/to/rollout-....jsonl
 ```
 
-### 再作成時の接続先・作成オプション
+### 作成・再作成時の接続先とオプション
 
 このツールの設定は `~/.config/kb/config.json` に保存します。`stores` は `kb store add` が管理します。
-再作成で使用する既存ビルダーの引数は、同ファイルの `build_args` で指定します。
+`kb create` と起動時の再作成で使用するビルダーの引数は、同ファイルの `build_args` で指定します。
 キー本体は設定や保存先リポジトリに入れず、ローカルのキーファイルを指定してください。
 
 ```json

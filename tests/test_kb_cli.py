@@ -109,6 +109,99 @@ class GitStoreTest(unittest.TestCase):
             kb_cli.main(["store", "remove", "first"])
         self.assertEqual(kb_store.read_config()["stores"], [self.store2])
 
+    def test_register_prompts_for_name_source_branch_store_and_lists_unbuilt(self):
+        with mock.patch("builtins.input", side_effect=["example", str(self.source), "feature/kb", self.store2["url"]]) as prompt, \
+             mock.patch.object(kb_cli, "rebuild") as rebuild, \
+             contextlib.redirect_stdout(io.StringIO()):
+            kb_cli.main(["登録"])
+        self.assertEqual([call.args[0] for call in prompt.call_args_list],
+                         ["KB名: ", "元リポジトリのURL: ", "基準ブランチ [main]: ", "保存先GitリポジトリのURL: "])
+        config = kb_store.read_config()
+        self.assertEqual(config["stores"], [{"name": "store2", "url": self.store2["url"]}])
+        loaded = kb_store.find_kb(config, "example", download=False)
+        self.assertEqual(loaded["info"], {"repository_url": str(self.source), "source_commit": None, "branch": "feature/kb"})
+        self.assertIsNone(loaded["jsonl"])
+        self.assertEqual(kb_store.git(self.store2["url"], "ls-tree", "--name-only", "main:example").stdout.splitlines(), ["info.json"])
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            kb_cli.main(["list"])
+        self.assertIn("example\tstore2\t未作成\tfeature/kb", output.getvalue())
+        with mock.patch.object(kb_codex, "start_session") as start:
+            with self.assertRaisesRegex(ValueError, "kb create example"):
+                kb_cli.main(["codex", "example", "--session-only"])
+        start.assert_not_called()
+        rebuild.assert_not_called()
+
+    def test_register_uses_existing_store_defaults_and_preserves_build_settings(self):
+        config = {**self.config, "build_args": ["--workers", "12"]}
+        kb_store.write_config(config)
+        with mock.patch("builtins.input", side_effect=[str(self.source), "", ""]) as prompt, \
+             contextlib.redirect_stdout(io.StringIO()):
+            kb_cli.main(["register", "example"])
+        self.assertEqual(prompt.call_count, 3)
+        self.assertEqual(kb_store.read_config(), config)
+        loaded = kb_store.find_kb(config, "example", download=False)
+        self.assertEqual(loaded["store"], self.store1)
+        self.assertEqual(loaded["info"]["branch"], "main")
+
+    def test_register_does_not_replace_existing_kb_or_its_metadata(self):
+        kb_store.write_config(self.config)
+        revision = kb_store.publish(self.store1, "example", self.info, self.jsonl)
+        with mock.patch("builtins.input", side_effect=["https://example.com/other.git", "other", self.store1["url"]]), \
+             contextlib.redirect_stdout(io.StringIO()):
+            with self.assertRaisesRegex(ValueError, "登録済み"):
+                kb_cli.main(["register", "example"])
+        loaded = kb_store.find_kb(self.config, "example")
+        self.assertEqual(loaded["info"], self.info)
+        self.assertEqual(loaded["store_revision"], revision)
+        self.assertEqual(loaded["jsonl"].read_bytes(), self.jsonl.read_bytes())
+
+    def test_register_new_store_name_collision_keeps_existing_entries(self):
+        config = {"stores": [{"name": "store2", "url": self.store1["url"]}], "build_args": ["--workers", "12"]}
+        kb_store.write_config(config)
+        with mock.patch("builtins.input", side_effect=[str(self.source), "main", self.store2["url"]]), \
+             contextlib.redirect_stdout(io.StringIO()):
+            kb_cli.main(["register", "example"])
+        saved = kb_store.read_config()
+        self.assertEqual(saved["stores"], [*config["stores"], {"name": "store2-2", "url": self.store2["url"]}])
+        self.assertEqual(saved["build_args"], config["build_args"])
+
+    def test_incomplete_registration_does_not_publish_or_change_config(self):
+        for answers, error in (([""], ValueError), (["example", ""], ValueError),
+                               (["example", EOFError()], EOFError)):
+            with self.subTest(answers=answers), mock.patch("builtins.input", side_effect=answers), \
+                 mock.patch.object(kb_store, "publish") as publish:
+                with self.assertRaises(error):
+                    kb_cli.main(["register"])
+                publish.assert_not_called()
+                self.assertFalse(kb_store.CONFIG.exists())
+
+    def test_create_uses_requested_store_and_registered_branch(self):
+        kb_store.git(self.source, "branch", "kb-source", self.base)
+        kb_store.write_config(self.config)
+        first_revision = kb_store.publish(self.store1, "example", self.info, self.jsonl)
+        selected_info = {**self.info, "branch": "kb-source"}
+        kb_store.publish(self.store2, "example", selected_info, self.jsonl)
+        with mock.patch.object(kb_cli, "rebuild", return_value=self.jsonl) as rebuild, \
+             mock.patch.object(kb_codex, "start_session") as start, \
+             contextlib.redirect_stdout(io.StringIO()):
+            kb_cli.main(["create", "example", "--store", "second"])
+        rebuild.assert_called_once_with("example", selected_info, self.base, self.config)
+        start.assert_not_called()
+        self.assertEqual(kb_store.find_kb(self.config, "example", "first")["store_revision"], first_revision)
+
+    def test_create_failure_leaves_registration_unbuilt(self):
+        kb_store.write_config(self.config)
+        info = {**self.info, "source_commit": None}
+        revision = kb_store.publish(self.store1, "example", info, create_only=True)
+        with mock.patch.object(kb_cli, "rebuild", side_effect=RuntimeError("generation failed")), \
+             contextlib.redirect_stdout(io.StringIO()):
+            with self.assertRaisesRegex(RuntimeError, "generation failed"):
+                kb_cli.main(["create", "example"])
+        loaded = kb_store.find_kb(self.config, "example", download=False)
+        self.assertEqual(loaded["info"], info)
+        self.assertEqual(loaded["store_revision"], revision)
+
     def args(self, rebuild="ask"):
         return SimpleNamespace(name="example", store=None, rebuild=rebuild, workspace=str(self.root),
                                no_yolo=False, session_only=True, app=False, prompt=None)
@@ -160,6 +253,12 @@ class GitStoreTest(unittest.TestCase):
         self.assertEqual(kb_store.find_kb(self.config, "example")["store_revision"], revision)
 
     def test_rebuild_runs_existing_v2_builder_and_publishes_result(self):
+        self.check_builder_flow(first_build=False)
+
+    def test_register_then_create_runs_v2_builder_and_publishes_result(self):
+        self.check_builder_flow(first_build=True)
+
+    def check_builder_flow(self, *, first_build):
         requests = []
         output_blob = {"type": "compaction", "id": "rebuilt", "encrypted_content": "new-opaque"}
 
@@ -190,7 +289,13 @@ class GitStoreTest(unittest.TestCase):
         repo_map.write_text("code.py contains a value\n")
         config = {**self.config, "build_args": ["--origin", f"http://127.0.0.1:{server.server_port}",
                                               "--key-file", str(key), "--repo-map", str(repo_map)]}
-        kb_store.publish(self.store1, "example", self.info, self.jsonl)
+        if first_build:
+            kb_store.write_config(config)
+            with mock.patch("builtins.input", side_effect=[str(self.source), "main", self.store1["url"]]), \
+                 contextlib.redirect_stdout(io.StringIO()):
+                kb_cli.main(["register", "example"])
+        else:
+            kb_store.publish(self.store1, "example", self.info, self.jsonl)
         original_run = subprocess.run
         minted = self.root / ".codex/sessions/2026/09/17/rollout-test-rebuilt-id.jsonl"
 
@@ -212,7 +317,10 @@ class GitStoreTest(unittest.TestCase):
              mock.patch.object(subprocess, "run", side_effect=run), \
              mock.patch.object(kb_codex, "start_session", return_value="started") as start, \
              contextlib.redirect_stdout(io.StringIO()):
-            kb_cli.launch(self.args("always"), config)
+            if first_build:
+                kb_cli.main(["create", "example"])
+            else:
+                kb_cli.launch(self.args("always"), config)
         self.assertEqual(len(requests), 1)
         self.assertEqual(requests[0][0], "/_pool/rr/responses")
         self.assertEqual(requests[0][1]["input"][-1], {"type": "compaction_trigger"})
@@ -220,7 +328,15 @@ class GitStoreTest(unittest.TestCase):
         latest = kb_store.find_kb(config, "example")
         self.assertEqual(latest["info"]["source_commit"], self.head)
         self.assertEqual(latest["jsonl"].read_bytes(), minted.read_bytes())
-        self.assertEqual(start.call_args.args[3], "")
+        if first_build:
+            start.assert_not_called()
+            output = io.StringIO()
+            with contextlib.redirect_stdout(output):
+                kb_cli.main(["list"])
+            self.assertIn(self.head[:12], output.getvalue())
+            self.assertNotIn("未作成", output.getvalue())
+        else:
+            self.assertEqual(start.call_args.args[3], "")
 
 
 class CodexHandoffTest(unittest.TestCase):
