@@ -17,6 +17,104 @@ Python 3.12と依存関係をプロジェクト専用環境へ用意します。
 map/blob生成には不要です。初回のパッケージ・tiktoken辞書取得にはネットワークを使いますが、
 map生成自体にLLM呼び出しやAPIキーは不要です。
 
+## Gitに保存したKBを `kb codex` で開く
+
+```bash
+bash install.sh
+kb store add work https://github.com/your-account/kb-store.git
+kb store add personal git@example.com:your-account/another-kb-store.git
+kb store list
+kb list
+kb codex octane
+```
+
+保存先は通常のGitリポジトリです。組織・公開範囲・ホストの固定はありません。
+各保存先には初回commitと既定ブランチを作っておきます。Gitの既存の認証設定を利用します。
+`kb store add <名前> <URL> --branch <ブランチ>` で保存先のブランチも指定できます。
+同名で再登録すると接続先を更新し、`kb store remove <名前>` でローカルの登録を取り除きます。
+
+保存先は登録順に検索します。同名KBが複数ある場合は最初のものを使い、
+`kb codex octane --store work` で保存先を指定できます。配置は次の2ファイルです。
+
+```text
+octane/
+  info.json
+  latest.jsonl
+```
+
+`info.json`:
+
+```json
+{
+  "repository_url": "https://github.com/owner/repository.git",
+  "source_commit": "KBを作成したcommitの完全なSHA",
+  "branch": "main"
+}
+```
+
+名前はディレクトリ名、session IDはJSONL先頭の `session_meta.id` から取得します。
+`latest.jsonl` の複数blob・型・未知のフィールドはそのまま保存します。
+新しいKBを保存すると2ファイルを同じcommitで更新し、過去版はGit履歴に残ります。
+
+起動時の流れ:
+
+1. 保存先Gitリポジトリをfetchし、同じcommitにある `info.json` と `latest.jsonl` を取得。
+2. 元リポジトリの基準ブランチをfetchし、KB作成時commitと比較。
+3. commitが異なる場合に「KBを作り直しますか？ [y/N]」と質問。
+   - **Yes**: 既存のrepo-map/v2圧縮処理でその時点のHEADから作り直し、選択された保存先にcommit/push。
+   - **No**: 既存KBに加えてcommit一覧とGit diffを使う。保存済みKBは更新しない。
+4. 取得したJSONLのsession IDをローカル用の新IDにしたコピーを取り込み、そこからforkする。
+   既存セッションとのID衝突を避け、blobを含む履歴行はそのまま維持する。
+   更新差分を**fork後の最初の依頼**に渡す。
+   元テンプレート末尾へ未完了メッセージとして追記する方法は使わない。
+5. 応答を待ち、そのセッションを `codex resume` で開く。
+
+起動時に推論が1回発生します。基準ブランチと同じcommitなら質問は出ません。
+`--rebuild always` / `--rebuild never` で回答を指定できます。
+標準入力がEOFの場合は再作成せず差分を追加し、その旨を表示します。
+取得・再作成・保存に失敗した場合はエラーを表示し、黙って古い内容で起動しません。
+
+作業場所は現在のディレクトリです。`--workspace /path/to/work` で変更できます。
+`--session-only` はセッション作成まで、`--app` はCodex Appで開きます。
+`--prompt '依頼内容'` で最初の依頼を指定できます。既定はFull Accessで、
+`--no-yolo` はCodexの既定権限を使います。Codexの設定・ログインは変更しません。
+
+### 作成済みKBを保存先へ登録する
+
+下記の作成コマンドが出力したJSONLを指定します。
+
+```bash
+kb publish octane --store work \
+  --repository-url https://github.com/owner/repository.git \
+  --source-commit <完全なSHA> --branch main \
+  --jsonl /path/to/rollout-....jsonl
+```
+
+### 再作成時の接続先・作成オプション
+
+このツールの設定は `~/.config/kb/config.json` に保存します。`stores` は `kb store add` が管理します。
+再作成で使用する既存ビルダーの引数は、同ファイルの `build_args` で指定します。
+キー本体は設定や保存先リポジトリに入れず、ローカルのキーファイルを指定してください。
+
+```json
+{
+  "stores": [{"name": "work", "url": "https://github.com/your-account/kb-store.git"}],
+  "build_args": [
+    "--origin", "https://your-pool.example",
+    "--key-file", "/path/to/pool-client.key",
+    "--workers", "12"
+  ]
+}
+```
+
+読解指示・API指示・共通マップ・二次圧縮オプションも `build_args` で指定できます。
+未指定時は作成器の既定値を使います。元KBに使った独自の作成オプションを維持したい場合は、
+ここに同じ指定を設定してください。再作成は新しいstateディレクトリを使うため、
+古いcommitの完了済みパックを混ぜません。既定は12並列・二次圧縮なしです。
+
+Gitキャッシュと取得済みJSONLは `~/.cache/kb/`、再作成の中間成果物は
+`~/.local/share/kb/builds/` に置きます。
+
 ## mapだけ見る
 
 ```bash
