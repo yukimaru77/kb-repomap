@@ -75,6 +75,10 @@ def events(source):
             data.append(value[1:] if value.startswith(" ") else value)
 
 
+class CompactionStreamInterrupted(ValueError):
+    """The stream closed without a terminal response.completed event."""
+
+
 def compaction_result(source):
     items = []
     for event in events(source):
@@ -90,7 +94,7 @@ def compaction_result(source):
                     or not items[0]["encrypted_content"]):
                 raise ValueError("upstream completed without one encrypted compaction item")
             return items, (event.get("response") or {}).get("usage") or {}
-    raise ValueError("stream ended before response.completed")
+    raise CompactionStreamInterrupted("stream ended before response.completed")
 
 
 def u(text):  # user message item
@@ -201,6 +205,7 @@ def compact(items, model=DEFAULT_MODEL, effort=DEFAULT_EFFORT,
             TimeoutError,
             ConnectionError,
             IncompleteRead,
+            CompactionStreamInterrupted,
             json.JSONDecodeError,
             ssl.SSLError,
         ) as error:

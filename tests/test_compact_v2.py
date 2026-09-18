@@ -147,6 +147,47 @@ class CompactV2Test(unittest.TestCase):
                     kb_api.compact([])
                 self.assertEqual(request.call_count, 1)
 
+    def test_stream_eof_retries_and_discards_uncompleted_blob(self):
+        partial = {"type": "compaction", "id": "unfinished", "encrypted_content": "discard"}
+        for first in (sse(), sse({"type": "response.output_item.done", "item": partial})):
+            with self.subTest(first=first.getvalue()), \
+                 mock.patch.object(kb_api, "http", side_effect=[first, success()]) as request, \
+                 mock.patch.object(kb_api.random, "random", return_value=0), \
+                 mock.patch.object(kb_api.time, "sleep") as sleep, \
+                 mock.patch("sys.stderr", new_callable=io.StringIO) as log:
+                output, _, usage = kb_api.compact([kb_api.u("source")], retry_label="pack-25")
+            self.assertEqual(request.call_count, 2)
+            self.assertEqual(request.call_args_list[0], request.call_args_list[1])
+            self.assertTrue(first.closed)
+            sleep.assert_called_once_with(1)
+            self.assertEqual([blob["id"] for blob in output], ["blob"])
+            self.assertEqual(usage["output_tokens"], 3000)
+            self.assertIn("retry pack-25: stream ended before response.completed", log.getvalue())
+
+    def test_stream_eof_stops_at_existing_retry_limit(self):
+        responses = [sse() for _ in range(kb_api.COMPACT_MAX_ATTEMPTS)]
+        with mock.patch.object(kb_api, "http", side_effect=responses) as request, \
+             mock.patch.object(kb_api.time, "sleep") as sleep, \
+             mock.patch("sys.stderr", new_callable=io.StringIO):
+            with self.assertRaisesRegex(kb_api.CompactionStreamInterrupted, "stream ended"):
+                kb_api.compact([])
+        self.assertEqual(request.call_count, kb_api.COMPACT_MAX_ATTEMPTS)
+        self.assertEqual(sleep.call_count, kb_api.COMPACT_MAX_ATTEMPTS - 1)
+        self.assertTrue(all(response.closed for response in responses))
+
+    def test_terminal_failure_and_invalid_completed_result_are_not_retried(self):
+        for response in (
+            sse({"type": "error"}), sse({"type": "response.failed"}),
+            sse({"type": "response.incomplete"}), sse({"type": "response.completed"}),
+        ):
+            with self.subTest(wire=response.getvalue()), \
+                 mock.patch.object(kb_api, "http", return_value=response) as request, \
+                 mock.patch.object(kb_api.time, "sleep") as sleep:
+                with self.assertRaises(ValueError):
+                    kb_api.compact([])
+            self.assertEqual(request.call_count, 1)
+            sleep.assert_not_called()
+
     def test_pool_client_auth_and_rr_route_without_codex_auth(self):
         with tempfile.TemporaryDirectory() as temp:
             key = Path(temp) / "client.key"
