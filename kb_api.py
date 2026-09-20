@@ -51,9 +51,9 @@ def http(path, body, timeout=600, stream=False):
     base_url, api_key = pool_configuration()
     request = urllib.request.Request(
         base_url + path, data=json.dumps(body, ensure_ascii=False).encode(),
+        # Codex User-Agent/originator are supplied by the pool's route headers.
         headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json",
-                 "Accept": "text/event-stream" if stream else "application/json",
-                 "Originator": "codex_cli_rs"},
+                 "Accept": "text/event-stream" if stream else "application/json"},
         method="POST",
     )
     return urllib.request.build_opener(NoRedirect()).open(request, timeout=timeout)

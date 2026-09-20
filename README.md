@@ -273,6 +273,13 @@ originには `/v1` などのパスを付けません。宛先はプールの **`
 一次・二次とも専用のround-robin経路を使います。認証はプールのクライアントAPIキーで行い、
 Codexの認証ファイルは読みません。アカウント選択・トークン更新はプールの担当です。
 
+Codex用の `User-Agent` と `originator` も号池側で毎回付与します。
+号池はルート別ヘッダー設定に対応した版（`421a868` 以降）を使い、サーバーの
+`pool.json` の `round_robin_endpoints["/_pool/rr/responses"].headers` に
+実通信で確認した値を設定してください。KB側ではCodexのバージョンや識別ヘッダーを固定しません。
+KBが送るのはプール認証と `Content-Type: application/json`、`Accept: text/event-stream` です。
+WebSocket専用ヘッダーや一時的なセッションIDは、このHTTP/SSE経路にはコピーしません。
+
 このツール用の `KB_POOL_ORIGIN`、`KB_POOL_KEY_FILE`、`KB_POOL_PRIVATE_HTTP=1` でも指定できます。
 Codex側の設定・ログイン・環境変数を変更する処理はありません。
 
