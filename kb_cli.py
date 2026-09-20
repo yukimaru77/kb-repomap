@@ -11,6 +11,9 @@ import uuid
 
 import kb_codex
 import kb_store as store
+from kb_items import dump_items
+from kb_api import COMPACTION_TYPES
+from kb_fork_mint import CHARTER
 
 
 ROOT = Path(__file__).resolve().parent
@@ -18,7 +21,7 @@ BUILD_ROOT = Path.home() / ".local/share/kb/builds"
 
 
 def file_argument(value):
-    return store.jsonl_filename(value if value.endswith(".jsonl") else value + ".jsonl")
+    return store.jsonl_filename(value if value.endswith((".json", ".jsonl")) else value + ".json")
 
 
 def rebuild(name, info, commit, config):
@@ -29,13 +32,14 @@ def rebuild(name, info, commit, config):
                *config.get("build_args", []), "--name", name, "--ref", commit,
                "--workspace", str(build_root / "repos"), "--no-mint"]
     subprocess.run(command, env=env, check=True)
-    subprocess.run([sys.executable, str(ROOT / "kb_fork_mint.py"), "--name", name],
-                   env=env, check=True)
-    session_id = (build_root / "kb-session").read_text().strip()
-    paths = list((Path.home() / ".codex/sessions").glob(f"*/*/*/rollout-*{session_id}.jsonl"))
-    if len(paths) != 1:
-        raise ValueError(f"生成したJSONLが見つかりません: {session_id}")
-    return paths[0]
+    state = json.loads((build_root / name / "state.json").read_text())
+    items = [item for item in state.get("blobs") or state.get("base_items", [])
+             if item.get("type") in COMPACTION_TYPES]
+    items.append({"type": "message", "role": "user",
+                  "content": [{"type": "input_text", "text": CHARTER}]})
+    snapshot = build_root / name / "kb.json"
+    dump_items(snapshot, items)
+    return snapshot
 
 
 def should_rebuild(mode):
@@ -84,7 +88,7 @@ def register(args, config):
     print(f"作成: kb create {name} --store {selected['name']}")
 
 
-def create_kb(name, loaded, commit, config, filename="latest.jsonl"):
+def create_kb(name, loaded, commit, config, filename="latest.json"):
     print(f"KBを作成します: {name}@{commit} / store: {loaded['store']['name']}", flush=True)
     jsonl = rebuild(name, loaded["info"], commit, config)
     info = {**loaded["info"], "source_commit": commit}
@@ -147,13 +151,13 @@ def main(argv=None):
     remove.add_argument("name")
     listing = commands.add_parser("list", help="保存先にあるKBを一覧表示")
     listing.add_argument("--store")
-    publish = commands.add_parser("publish", help="作成済みJSONLと元データ情報を保存")
+    publish = commands.add_parser("publish", help="KB項目列と元データ情報を保存（旧JSONLも読込可）")
     publish.add_argument("name", type=store.name_value)
     publish.add_argument("--store")
     publish.add_argument("--repository-url", required=True)
     publish.add_argument("--source-commit", required=True)
     publish.add_argument("--branch", required=True)
-    publish.add_argument("--jsonl", type=Path, required=True)
+    publish.add_argument("--kb", "--jsonl", dest="jsonl", metavar="PATH", type=Path, required=True)
     codex = commands.add_parser("codex", help="KBを取得して新規Codexセッションを起動")
     codex.add_argument("name", type=store.name_value)
     codex.add_argument("--store")
@@ -166,8 +170,8 @@ def main(argv=None):
     codex.add_argument("--prompt")
     codex.add_argument("--remote", action="store_true", help="号池にKBを登録し、推論時だけ挿入する")
     for command in (creation, publish, codex):
-        command.add_argument("--file", default="latest.jsonl", type=file_argument,
-                             help="保存・利用するJSONLのファイル名（.jsonlは省略可、既定: latest.jsonl、同名は上書き）")
+        command.add_argument("--file", default="latest.json", type=file_argument,
+                             help="KBファイル名（.jsonは省略可、既定: latest.json、旧.jsonlも読込可、同名は上書き）")
     args = parser.parse_args(argv)
     config = store.read_config()
     if args.command == "register":
@@ -200,7 +204,9 @@ def main(argv=None):
                     info = json.loads(store.git(repo, "show", f"{revision}:{filename}").stdout)
                     commit = info.get("source_commit")
                     name, metadata = filename.split("/")
-                    jsonl_name = "latest.jsonl" if metadata == "info.json" else metadata.removesuffix(".info.json") + ".jsonl"
+                    jsonl_name = "latest.json" if metadata == "info.json" else metadata.removesuffix(".info.json") + ".json"
+                    if commit:
+                        jsonl_name = store.snapshot_filename(repo, revision, name, jsonl_name)
                     print(f"{name}\t{entry['name']}\t{commit[:12] if commit else '未作成'}\t{info['branch']}\t{jsonl_name}")
     elif args.command == "publish":
         info = {"repository_url": args.repository_url, "source_commit": args.source_commit, "branch": args.branch}

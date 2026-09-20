@@ -117,3 +117,18 @@ Private local evidence is stored under
 `state/benchmarks/octane-6ac751c-20260917/`: `verify-session.py`,
 `fork-check-result.json`, `fork-check-events.jsonl`, and the earlier `result.json`.
 The original KB rollout, Codex config, and executable hashes matched before/after.
+
+## Portable KB snapshots and fresh local sessions (2026-09-21)
+
+Converted the existing pi snapshot to a JSON array of two encrypted compaction
+items and its KB user charter. The encrypted items and their order were retained;
+session metadata and base instructions were not copied.
+
+Both normal and remote startup were exercised with the installed Codex app-server.
+Each created a fresh thread using local configuration and answered `openpi / π0`
+from the KB without tools. Neither thread had a `forked_from_id`. The normal
+thread persisted the two injected blobs; the remote thread persisted zero KB
+blobs and used the same three-item remote snapshot as before conversion.
+
+The older fork validations above describe the legacy standalone mint workflow,
+not the current `kb codex` startup path.

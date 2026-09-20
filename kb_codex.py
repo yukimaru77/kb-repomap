@@ -3,32 +3,8 @@
 Copyright (c) 2026 GMO Pepabo, Inc. See LICENSE.kb-cli.
 """
 import json
-import datetime as dt
-import os
-from pathlib import Path
 import subprocess
-import uuid
-
-
-def import_template(jsonl):
-    """Import an immutable store snapshot without colliding with local thread IDs."""
-    first, separator, rest = Path(jsonl).read_bytes().partition(b"\n")
-    meta = json.loads(first)
-    now = dt.datetime.now(dt.timezone.utc)
-    session_id = str(uuid.UUID(int=(int(now.timestamp() * 1000) << 80)
-                              | (0x7 << 76) | (int.from_bytes(os.urandom(2), "big") & 0xFFF) << 64
-                              | (0b10 << 62) | (int.from_bytes(os.urandom(8), "big") & ((1 << 62) - 1))))
-    meta["payload"]["id"] = session_id
-    if "session_id" in meta["payload"]:
-        meta["payload"]["session_id"] = session_id
-    sessions = Path(os.environ.get("CODEX_HOME", str(Path.home() / ".codex"))) / "sessions"
-    directory = sessions / f"{now:%Y/%m/%d}"
-    directory.mkdir(parents=True, exist_ok=True)
-    target = directory / f"rollout-{now:%Y-%m-%dT%H-%M-%S}-{session_id}.jsonl"
-    with target.open("xb") as output:
-        os.fchmod(output.fileno(), 0o600)
-        output.write(json.dumps(meta, ensure_ascii=False).encode() + separator + rest)
-    return session_id
+from kb_items import load_items
 
 
 class CodexAppServer:
@@ -66,15 +42,6 @@ class CodexAppServer:
                 return message.get("result", {})
             if observe:
                 observe(message)
-
-    def fork(self, jsonl, workspace, full_access):
-        # The store snapshot can share an ID with a locally indexed thread.
-        # Import it under a fresh ID and let Codex resolve its native session path.
-        params = {"threadId": import_template(jsonl),
-                  "cwd": str(workspace), "ephemeral": False}
-        if full_access:
-            params.update(sandbox="danger-full-access", approvalPolicy="never")
-        return self.request("thread/fork", params)["thread"]["id"]
 
     def start(self, workspace, full_access):
         params = {"cwd": str(workspace), "ephemeral": False}
@@ -128,6 +95,8 @@ class CodexAppServer:
 
 
 def start_session(jsonl, workspace, name, update_context, *, full_access=True, prompt=None, remote=None):
+    # Validate before starting Codex. Never import a producer's session metadata.
+    items = load_items(jsonl) if remote is None else None
     if remote is not None:
         # thread/start may open a prewarm socket before returning its ID.
         # Register, persist the new empty thread, then close this app-server so
@@ -135,14 +104,23 @@ def start_session(jsonl, workspace, name, update_context, *, full_access=True, p
         with CodexAppServer() as bootstrap:
             session_id = bootstrap.start(workspace, full_access)
             remote.bind(session_id)
+            # Naming an empty thread only updates its index; it does not create
+            # a rollout. Persist a small marker through the native history API
+            # before closing the prewarmed connection. Keep KB items remote.
+            bootstrap.request("thread/inject_items", {
+                "threadId": session_id,
+                "items": [{"type": "message", "role": "developer", "content": [
+                    {"type": "input_text", "text": "Remote KB is provided by the account pool for this session."}
+                ]}],
+            })
             bootstrap.request("thread/name/set", {"threadId": session_id, "name": f"{name} Remote KBを活用する"})
     with CodexAppServer() as server:
         if remote is None:
-            session_id = server.fork(jsonl, workspace, full_access)
+            session_id = server.start(workspace, full_access)
+            server.request("thread/inject_items", {"threadId": session_id, "items": items})
         else:
             server.resume(session_id, workspace, full_access)
-        # Submit updates AFTER the fork: an unfinished trailing user message in
-        # a synthetic template can be omitted by Codex's fork snapshot boundary.
+        # The new session uses the installed Codex and the caller's local config.
         instruction = prompt or "今まで読んだ内容をふんだんに活用してください。"
         first_turn = "\n\n".join(part for part in (update_context, instruction) if part)
         server.run_turn(session_id, first_turn, workspace)

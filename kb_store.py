@@ -6,6 +6,7 @@ from pathlib import Path
 import re
 import subprocess
 import tempfile
+from kb_items import dump_items, load_items
 
 
 CONFIG = Path.home() / ".config/kb/config.json"
@@ -27,15 +28,16 @@ def name_value(value):
 
 
 def jsonl_filename(value):
-    if (not value.endswith(".jsonl") or len(value) <= len(".jsonl")
+    if (not value.endswith((".json", ".jsonl")) or not Path(value).stem
+            or value in (".json", ".jsonl", "info.json") or value.endswith(".info.json")
             or any(char in value for char in ("/", "\\", "\0"))):
-        raise ValueError("保存名にはディレクトリを含まない .jsonl ファイル名を指定してください")
+        raise ValueError("保存名にはディレクトリを含まない .json / .jsonl ファイル名を指定してください")
     return value
 
 
 def info_filename(filename):
     jsonl_filename(filename)
-    return "info.json" if filename == "latest.jsonl" else filename.removesuffix(".jsonl") + ".info.json"
+    return "info.json" if filename in ("latest.json", "latest.jsonl") else Path(filename).stem + ".info.json"
 
 
 def read_config():
@@ -85,7 +87,15 @@ def sync_store(store):
     return repo, revision, branch
 
 
-def find_kb(config, name, selected=None, *, download=True, filename="latest.jsonl"):
+def snapshot_filename(repo, revision, name, filename):
+    if filename.endswith(".json") and git(repo, "cat-file", "-e", f"{revision}:{name}/{filename}", check=False).returncode:
+        legacy = filename.removesuffix(".json") + ".jsonl"
+        if not git(repo, "cat-file", "-e", f"{revision}:{name}/{legacy}", check=False).returncode:
+            return legacy
+    return filename
+
+
+def find_kb(config, name, selected=None, *, download=True, filename="latest.json"):
     name_value(name)
     metadata = info_filename(filename)
     for store in configured_stores(config, selected):
@@ -98,8 +108,9 @@ def find_kb(config, name, selected=None, *, download=True, filename="latest.json
         if download:
             if not info.get("source_commit"):
                 raise ValueError(f"KBは登録済みですが未作成です。kb create {name} で作成してください")
-            raw = git(repo, "show", f"{revision}:{name}/{filename}", text=False).stdout
-            destination = CACHE / "downloads" / repo.stem / revision / name / filename
+            actual = snapshot_filename(repo, revision, name, filename)
+            raw = git(repo, "show", f"{revision}:{name}/{actual}", text=False).stdout
+            destination = CACHE / "downloads" / repo.stem / revision / name / actual
             destination.parent.mkdir(parents=True, exist_ok=True)
             destination.write_bytes(raw)
             destination.chmod(0o600)
@@ -138,7 +149,7 @@ def source_update(info):
     return head, context
 
 
-def publish(store, name, info, jsonl=None, *, create_only=False, filename="latest.jsonl"):
+def publish(store, name, info, jsonl=None, *, create_only=False, filename="latest.json"):
     """Commit registration or a complete KB; concurrent Git pushes stay atomic."""
     name_value(name)
     metadata = info_filename(filename)
@@ -152,15 +163,21 @@ def publish(store, name, info, jsonl=None, *, create_only=False, filename="lates
             raise ValueError(f"KBは登録済みです: {name} / store: {store['name']}")
         directory.mkdir(exist_ok=True)
         files = []
-        if filename != "latest.jsonl" and not (directory / "info.json").exists():
+        if filename not in ("latest.json", "latest.jsonl") and not (directory / "info.json").exists():
             registration = {**info, "source_commit": None}
             (directory / "info.json").write_text(json.dumps(registration, ensure_ascii=False, indent=2) + "\n")
             files.append(f"{name}/info.json")
         (directory / metadata).write_text(json.dumps(info, ensure_ascii=False, indent=2) + "\n")
         files.append(f"{name}/{metadata}")
         if jsonl is not None:
-            (directory / filename).write_bytes(Path(jsonl).read_bytes())
+            dump_items(directory / filename, load_items(jsonl))
             files.append(f"{name}/{filename}")
+            # One snapshot per stem: replace a legacy copy on migration, while
+            # preserving previous revisions in ordinary Git history.
+            other = Path(filename).stem + (".jsonl" if filename.endswith(".json") else ".json")
+            if (directory / other).exists():
+                (directory / other).unlink()
+                files.append(f"{name}/{other}")
         git(repo, "add", "--", *files)
         if git(repo, "diff", "--cached", "--quiet", check=False).returncode == 0:
             return git(repo, "rev-parse", "HEAD").stdout.strip()

@@ -12,6 +12,7 @@ from unittest import mock
 import kb_cli
 import kb_codex
 from kb_remote import RemoteKB
+from kb_fork_mint import CHARTER
 
 
 class RemoteKBTests(unittest.TestCase):
@@ -39,7 +40,7 @@ class RemoteKBTests(unittest.TestCase):
                 key.write_text("test-key\n")
                 source = root / "v1.00.jsonl"
                 items = [{"type": "compaction_summary", "encrypted_content": f"blob-{i}", "future": True}
-                         for i in range(35)] + [{"role": "user", "content": "charter"}]
+                         for i in range(35)] + [{"type": "message", "role": "user", "content": CHARTER}]
                 records = [{"type": "session_meta", "payload": {"id": "old"}}]
                 records += [{"type": "response_item", "payload": item} for item in items]
                 records += [{"type": "event_msg", "payload": {"never": "send"}}]
@@ -54,6 +55,12 @@ class RemoteKBTests(unittest.TestCase):
                 self.assertEqual(dict(os.environ), before)
                 self.assertEqual(source.read_bytes(), original)
                 self.assertEqual(seen, [("/_pool/kb/bind", "Bearer test-key", {"session_id": "new-session", "items": items})])
+                portable = root / "latest.json"
+                portable.write_text(json.dumps(items))
+                with contextlib.redirect_stdout(io.StringIO()):
+                    RemoteKB(config, portable).bind("portable-session")
+                self.assertEqual(seen[-1], ("/_pool/kb/bind", "Bearer test-key", {
+                    "session_id": "portable-session", "items": items}))
         finally:
             server.shutdown()
             server.server_close()
@@ -69,14 +76,19 @@ class RemoteKBTests(unittest.TestCase):
         contexts = [mock.MagicMock(), mock.MagicMock()]
         contexts[0].__enter__.return_value = bootstrap
         contexts[1].__enter__.return_value = active
-        with mock.patch.object(kb_codex, "CodexAppServer", side_effect=contexts), \
-             mock.patch.object(kb_codex, "import_template") as importer:
+        with mock.patch.object(kb_codex, "CodexAppServer", side_effect=contexts):
             result = kb_codex.start_session(Path("v1.00.jsonl"), Path("/work"), "example", "EXACT DIFF",
                                            prompt="Use the KB", full_access=False, remote=remote)
         self.assertEqual(result, "new-id")
-        self.assertEqual(calls.method_calls[:5], [
+        self.assertEqual(calls.method_calls[:6], [
             mock.call.bootstrap.start(Path("/work"), False),
             mock.call.remote.bind("new-id"),
+            mock.call.bootstrap.request("thread/inject_items", {
+                "threadId": "new-id",
+                "items": [{"type": "message", "role": "developer", "content": [
+                    {"type": "input_text", "text": "Remote KB is provided by the account pool for this session."}
+                ]}],
+            }),
             mock.call.bootstrap.request("thread/name/set", {"threadId": "new-id", "name": "example Remote KBを活用する"}),
             mock.call.active.resume("new-id", Path("/work"), False),
             mock.call.active.run_turn("new-id", "EXACT DIFF\n\nUse the KB", Path("/work")),
@@ -84,7 +96,6 @@ class RemoteKBTests(unittest.TestCase):
         contexts[0].__exit__.assert_called_once()
         bootstrap.fork.assert_not_called()
         active.fork.assert_not_called()
-        importer.assert_not_called()
 
     def test_registration_failure_never_sends_first_turn(self):
         with mock.patch.object(kb_codex, "CodexAppServer") as constructor:
@@ -118,7 +129,7 @@ class RemoteKBTests(unittest.TestCase):
              contextlib.redirect_stdout(io.StringIO()):
             kb_cli.main(["codex", "example", "--remote", "--store", "chosen", "--file", "v1.00",
                          "--session-only", "--rebuild", "never", "--prompt", "Use it"])
-        find.assert_called_once_with(config, "example", "chosen", filename="v1.00.jsonl")
+        find.assert_called_once_with(config, "example", "chosen", filename="v1.00.json")
         constructor.assert_called_once_with(config, loaded["jsonl"])
         self.assertEqual(start.call_args.args[3], "SOURCE DIFF")
         self.assertEqual(start.call_args.kwargs["remote"], constructor.return_value)
@@ -128,7 +139,7 @@ class RemoteKBTests(unittest.TestCase):
             root = Path(temporary)
             (root / "key").write_text("test-key")
             (root / "latest.jsonl").write_text('{"type":"session_meta","payload":{}}\n')
-            with self.assertRaisesRegex(ValueError, "response_item"):
+            with self.assertRaises(ValueError):
                 RemoteKB({"build_args": ["--origin", "http://127.0.0.1:8080", "--key-file", str(root / "key")]}, root / "latest.jsonl")
 
 

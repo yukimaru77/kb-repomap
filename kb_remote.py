@@ -6,6 +6,7 @@ from pathlib import Path
 import urllib.request
 
 from kb_api import NoRedirect, pool_configuration
+from kb_items import load_items
 
 
 class RemoteKB:
@@ -26,14 +27,7 @@ class RemoteKB:
         self.origin = base.removesuffix("/_pool/rr")
         # Session metadata belongs to Codex. Only model-visible response items
         # (all independent blobs, followed by the existing KB charter) go remote.
-        self.items = []
-        with Path(jsonl).open() as source:
-            for line in source:
-                record = json.loads(line)
-                if record.get("type") == "response_item":
-                    self.items.append(record["payload"])
-        if not self.items:
-            raise ValueError("Remote KB用のresponse_itemがJSONLにありません")
+        self.items = load_items(jsonl)
 
     def bind(self, session_id):
         request = urllib.request.Request(

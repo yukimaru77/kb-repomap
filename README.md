@@ -1,6 +1,7 @@
 # kb-repomap
 
-Gitリポジトリを **Aiderの構造マップ → v2圧縮blob → Codexのfork元セッション** にするツールです。
+Gitリポジトリを **Aiderの構造マップ → v2圧縮blob → 持ち運べるKB** にするツールです。
+保存するのはKB項目のJSON配列だけです。利用時に、そのPCのCodex設定で新しいセッションを作ります。
 
 `kb-multiblob` から独立し、LLMによる概要調査をAiderから切り出したrepo-mapエンジンへ
 置き換えました。圧縮は `responses + compaction_trigger` を使うCodexの新方式です。
@@ -48,17 +49,20 @@ kb codex xx      # KB入りの新規Codexセッションを開く
 既存の同名KBへの再登録は上書きせずエラーになります。
 
 `kb create xx` は登録されたURL・ブランチから、その時点のHEADを固定して作成します。
-成功すると `info.json` に作成commitを記録し、`latest.jsonl` と一緒にcommit/pushします。
+成功すると `info.json` に作成commitを記録し、`latest.json` と一緒にcommit/pushします。
+JSON配列には暗号化compaction項目と短いKB憲章（user指示）だけを保存します。
+`session_meta`、`base_instructions`、作成者のセッションID・会話履歴は含めません。
+作成時にCodexセッションを鋳造する工程はなく、既存のローカルセッションも不要です。
 作成済みKBに実行すると作り直します。登録した保存先を指定する場合は
 `kb create xx --store <保存先名>` を使います。
 
 作成には下記の `build_args` または `KB_POOL_*` による圧縮API接続先の設定が必要です。
 `kb list` では未作成KBを「未作成」と表示します。作成後は同じ名前で `kb codex xx` を使えます。
 
-### JSONLの保存名を指定する
+### KBの保存名を指定する
 
-`--file` で `latest.jsonl` 以外の名前を指定できます。省略時は従来どおり `latest.jsonl`。
-拡張子 `.jsonl` は省略でき、`--file v1.00` と `--file v1.00.jsonl` は同じファイルを指します。
+`--file` で `latest.json` 以外の名前を指定できます。省略時は `latest.json`。
+拡張子 `.json` は省略でき、`--file v1.00` と `--file v1.00.json` は同じファイルを指します。
 `create`・`publish`・`codex`（`--remote` を含む）で共通です。
 
 ```bash
@@ -67,14 +71,21 @@ kb codex octane --file v1.00
 kb list
 ```
 
-同じ名前で再作成すると、そのJSONLと作成情報を上書きしてcommit/pushします。
-別名のファイルや `latest.jsonl` は変更しません。`--file` にはパスを含まないファイル名を
-指定します。末尾に `.jsonl` がなければ補います。空白を含む名前は引用符で囲みます。
+同じ名前で再作成すると、そのKBと作成情報を上書きしてcommit/pushします。
+別名のファイルや `latest.json` は変更しません。`--file` にはパスを含まないファイル名を
+指定します。拡張子 `.json` / `.jsonl` がなければ `.json` を補います。空白を含む名前は引用符で囲みます。
 
 `kb list` はファイルごとに、KB名・保存先・作成commit・基準ブランチ・ファイル名を表示します。
-別名だけを作成した場合、`latest.jsonl` の行は「未作成」のままです。
+別名だけを作成した場合、`latest.json` の行は「未作成」のままです。
 `kb codex --file ...` の起動時も、そのファイルの作成commitから差分を確認します。
-再作成を選んだ場合は同じファイル名を更新します。指定したファイルがなければエラーになります。
+再作成を選んだ場合は同じファイル名を更新します。
+
+旧版の `latest.jsonl` や名前付きJSONLも読み込めます。指定した `.json` がなく、同名の
+`.jsonl` がある場合は自動で旧ファイルを読みます。どちらもなければエラーになります。
+旧JSONLからもKB項目だけを抽出し、保存元のシステム指示やセッション情報は引き継ぎません。
+既存の保存先を一括変換しなくても利用できます。新しく保存する内容はKB項目のJSON配列です。
+同じ保存名を新形式で保存すると、旧 `.jsonl` は最新のGitツリーから取り除きます。
+過去のセッション形式はGit履歴に残ります。
 
 ## Gitに保存したKBを `kb codex` で開く
 
@@ -82,7 +93,7 @@ kb list
 
 ```bash
 kb codex octane --remote
-kb codex octane --remote --file v1.00.jsonl --store work
+kb codex octane --remote --file v1.00.json --store work
 kb codex octane --remote --session-only --rebuild never
 ```
 
@@ -91,8 +102,8 @@ KB本体をローカルのCodex履歴に入れず、号池が推論要求の先�
 会話のcompaction blobがある場合も、その前に置く。コンパクト要求にはKBを含めない。
 サブエージェントは通信上の親セッション情報を通して同じKBを継承する。
 
-登録するのはJSONL内の全 `response_item`。複数の独立blobとKB憲章の順序を保つ。
-起動時にその内容を固定するため、あとで `latest.jsonl` を更新しても稼働中のセッションは変わらない。
+登録するのは保存されたKB項目の配列。複数の独立blobとKB憲章の順序を保つ。
+起動時にその内容を固定するため、あとで `latest.json` を更新しても稼働中のセッションは変わらない。
 Gitの更新確認・再作成の質問・再作成しない場合の差分追加は、通常の `kb codex` と共通。
 `--app`、`--session-only`、`--prompt`、`--file` も併用できる。
 
@@ -123,14 +134,14 @@ kb codex octane
 
 保存先は登録順に検索します。同名KBが複数ある場合は最初のものを使い、
 `kb codex octane --store work` で保存先を指定できます。
-既定の配置は `info.json` と `latest.jsonl`。別名保存ではJSONLごとに作成情報を持ちます。
+既定の配置は `info.json` と `latest.json`。別名保存ではKBファイルごとに作成情報を持ちます。
 
 ```text
 octane/
   info.json
-  latest.jsonl
-  v1.00.info.json  # --file v1.00.jsonl で保存したKBの作成情報
-  v1.00.jsonl
+  latest.json
+  v1.00.info.json  # --file v1.00.json で保存したKBの作成情報
+  v1.00.json
 ```
 
 `info.json`（別名保存の `v1.00.info.json` も同じ形式）:
@@ -143,22 +154,21 @@ octane/
 }
 ```
 
-名前はディレクトリ名、session IDはJSONL先頭の `session_meta.id` から取得します。
-各JSONLの複数blob・型・未知のフィールドはそのまま保存します。
-JSONLと対応する作成情報を同じcommitで更新し、過去版はGit履歴に残ります。
+名前はディレクトリ名です。保存するKBにsession IDはありません。
+複数blobの順序・型・未知のフィールドはそのまま保存します。
+KBと対応する作成情報を同じcommitで更新し、過去版はGit履歴に残ります。
 
 起動時の流れ:
 
-1. 保存先Gitリポジトリをfetchし、同じcommitにある指定JSONLと対応する作成情報を取得。
-   省略時は `info.json` と `latest.jsonl`。
+1. 保存先Gitリポジトリをfetchし、同じcommitにある指定KBと対応する作成情報を取得。
+   省略時は `info.json` と `latest.json`（旧 `latest.jsonl` も読み込み可能）。
 2. 元リポジトリの基準ブランチをfetchし、KB作成時commitと比較。
 3. commitが異なる場合に「KBを作り直しますか？ [y/N]」と質問。
    - **Yes**: 既存のrepo-map/v2圧縮処理でその時点のHEADから作り直し、選択された保存先にcommit/push。
    - **No**: 既存KBに加えてcommit一覧とGit diffを使う。保存済みKBは更新しない。
-4. 取得したJSONLのsession IDをローカル用の新IDにしたコピーを取り込み、そこからforkする。
-   既存セッションとのID衝突を避け、blobを含む履歴行はそのまま維持する。
-   更新差分を**fork後の最初の依頼**に渡す。
-   元テンプレート末尾へ未完了メッセージとして追記する方法は使わない。
+4. ローカルのCodex app-serverの `thread/start` で新しいセッションを作り、
+   `inject_items` でKB項目を挿入する。システム指示などは利用者のローカル設定から構築する。
+   更新差分を**新しいセッションの最初の依頼**に渡す。
 5. 応答を待ち、そのセッションを `codex resume` で開く。
 
 起動時に推論が1回発生します。基準ブランチと同じcommitなら質問は出ません。
@@ -173,17 +183,18 @@ JSONLと対応する作成情報を同じcommitで更新し、過去版はGit履
 
 ### 作成済みKBを保存先へ登録する
 
-下記の作成コマンドが出力したJSONLを指定します。
+KB項目のJSON配列を指定します。旧セッションJSONLも入力できます。
 
 ```bash
 kb publish octane --store work \
   --repository-url https://github.com/owner/repository.git \
   --source-commit <完全なSHA> --branch main \
-  --jsonl /path/to/rollout-....jsonl
+  --kb /path/to/kb.json
 ```
 
-`--jsonl` は読み込むローカルファイル、`--file v1.00.jsonl` は保存先でのファイル名です。
-`--file` を省略すると `latest.jsonl` に保存します。同名なら上書きします。
+`--kb` は読み込むローカルファイル、`--file v1.00.json` は保存先でのファイル名です。
+`--jsonl` は互換用の `--kb` 別名として使えます。旧JSONLを渡してもKB項目だけを保存します。
+`--file` を省略すると `latest.json` に保存します。同名なら上書きします。
 
 ### 作成・再作成時の接続先とオプション
 
@@ -233,7 +244,11 @@ Tailscaleなどの確認済み私設トンネル内でHTTPを使う場合は、`
 ここに同じ指定を設定してください。再作成は新しいstateディレクトリを使うため、
 古いcommitの完了済みパックを混ぜません。既定は12並列・二次圧縮なしです。
 
-Gitキャッシュと取得済みJSONLは `~/.cache/kb/`、再作成の中間成果物は
+生成時のモデル・推論強度・読解指示は圧縮を作るための設定です。`kb codex` で会話する際の
+モデルやベース指示は、そのPCのCodex設定を使います。作成者の設定をKBから復元しません。
+ただし、生成時にblobへ圧縮された資料や読解指示の影響は、そのblobに保持されます。
+
+Gitキャッシュと取得済みKBは `~/.cache/kb/`、再作成の中間成果物は
 `~/.local/share/kb/builds/` に置きます。
 
 ## mapだけ見る
@@ -294,7 +309,8 @@ Codex側の設定・ログイン・環境変数を変更する処理はありま
 4. 二段階圧縮を選んだ場合だけ、指定した個数または一次のAPI報告出力トークン数の合計で
    隣接blobをまとめ、同じv2で再圧縮。既定ではこの工程を省略し、一次blobをそのまま使う。
    最終結果も複数blobになり得る。出力トークン数は二次入力の見積もりであり厳密な上限保証ではない。
-5. セッション情報＋blob列＋KB用の指示を、新しいCodexセッションJSONLとして書く。
+5. `kb create` はblob列＋KB用のuser指示をJSON配列として保存する。
+   単体ビルダーの従来のセッション鋳造は別機能で、下記を参照。
 
 `compaction`、`compaction_summary`、暗号化内容を持つ `context_compaction` を扱います。
 blobの未知のフィールドも保存・再送し、セッション出力でも型名や内容を再構成しません。
@@ -400,7 +416,7 @@ uv run python kb_repo_url.py /path/to/repository \
 既存blobの指示は後から変更できないため、指示を変えて作り直す場合は新しい `--name` を使ってください。
 再開時は初回と同じ指示ファイルを指定します。
 
-### 保存先・再開・fork
+### 単体ビルダーの保存先・再開・従来のfork
 
 既定は `~/.kb-repomap/`。このツールの `KB_REPOMAP_HOME` で変更できます。
 旧 `~/.kb-multiblob/` は使いません。
@@ -420,7 +436,9 @@ uv run python kb_repo_url.py /path/to/repository \
 ビルダーを再実行します。`kb create` や `kb codex` の再作成を改めて選ぶと、新しい作業ディレクトリを
 作るため、前回の途中保存を自動では引き継ぎません。
 
-fork元生成は既存Codexセッションの `session_meta` をテンプレートとして読み、
+以下は単体の `kb_fork_mint.py` による従来のセッション鋳造です。
+`kb create` / `kb codex` の通常経路では使いません。
+このfork元生成は既存Codexセッションの `session_meta` をテンプレートとして読み、
 新しい `~/.codex/sessions/.../rollout-*.jsonl` を書きます。初回は既存セッションが必要です。
 
 **複数の独立したcompaction blobを同じ履歴に並べることが、このKBの意図した仕様です。**
