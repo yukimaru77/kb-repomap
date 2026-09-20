@@ -318,7 +318,7 @@ mapは構造・識別子の抜粋で、従来のLLMによる業務・設計解�
 - `--no-mint`: Codexのセッションファイルを作らずblob生成まで。
 - `--prelude-file metadata.md`: 追加資料を別blobとして先頭へ置く。二段階圧縮の対象外。
 
-[config.yaml](config.yaml) の既定値は `gpt-5.6-sol / high`、最大12並列、map予算10K、
+[config.yaml](config.yaml) の既定値は `gpt-6-astra / low`、最大12並列、map予算10K、
 一次パック予算150K、**二次圧縮なし**です。
 
 通常の作成コマンドに、必要な場合だけ次のどちらかを追加します。

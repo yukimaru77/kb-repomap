@@ -8,8 +8,8 @@ from concurrent.futures import ThreadPoolExecutor
 from http.client import IncompleteRead
 
 COMPACTION_TYPES = {"compaction", "compaction_summary", "context_compaction"}
-DEFAULT_MODEL = "gpt-5.6-sol"
-DEFAULT_EFFORT = "high"
+DEFAULT_MODEL = "gpt-6-astra"
+DEFAULT_EFFORT = "low"
 DEFAULT_COMPACT_WORKERS = 12
 COMPACT_MAX_ATTEMPTS = 6
 COMPACT_RETRY_MAX_DELAY = 30
@@ -181,7 +181,7 @@ def compact(items, model=DEFAULT_MODEL, effort=DEFAULT_EFFORT,
             retry_label="compact", instructions=CHARTER):
     body = {"model": model, "input": [*items, {"type": "compaction_trigger"}], "instructions": instructions,
             "stream": True, "store": False,
-            "reasoning": {"effort": effort},  # 深い思考で要約(保持量が増える実測傾向)
+            "reasoning": {"effort": effort},
             "parallel_tool_calls": False}
     t0 = time.time()
     for attempt in range(COMPACT_MAX_ATTEMPTS):
