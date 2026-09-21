@@ -1,0 +1,64 @@
+import contextlib
+import io
+import json
+import unittest
+from unittest import mock
+
+import test_kb_cli
+import kb_cli
+import kb_store
+from kb_items import load_items
+
+
+class PaperStoreTest(unittest.TestCase):
+    setUp = test_kb_cli.GitStoreTest.setUp
+    repo = test_kb_cli.GitStoreTest.repo
+    commit = test_kb_cli.GitStoreTest.commit
+
+    def fixture(self):
+        run = self.root / "paper-run"
+        run.mkdir()
+        (run / "kb.json").write_text(json.dumps(self.blobs[:3]))
+        (run / "manifest.json").write_text(json.dumps({"source_sha256": "a" * 64,
+            "model": "gpt-6-astra", "effort": "low", "budget": 150000,
+            "accounts": ["private-account"], "key_file": "private-key-path"}))
+        (run / "result.json").write_text(json.dumps({"references": 2, "main_blobs": 1, "items": 3}))
+        kb_store.write_config(self.config)
+        return run
+
+    def test_paper_publish_list_launch_without_repository_fetch(self):
+        run = self.fixture()
+        with contextlib.redirect_stdout(io.StringIO()):
+            kb_cli.main(["publish-paper", "paper", "--run", str(run), "--store", "second"])
+        loaded = kb_store.find_kb(self.config, "paper", "second")
+        self.assertEqual(load_items(loaded["jsonl"]), self.blobs[:3])
+        self.assertEqual(loaded["info"]["source_kind"], "paper")
+        self.assertNotIn("accounts", json.dumps(loaded["info"]))
+        self.assertNotIn("private-key-path", json.dumps(loaded["info"]))
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output), mock.patch.object(kb_store, "source_update") as update, \
+             mock.patch.object(kb_cli.kb_codex, "start_session", return_value="paper-id") as start:
+            kb_cli.main(["list", "--store", "second"])
+            kb_cli.main(["codex", "paper", "--store", "second", "--session-only"])
+        self.assertIn("paper\tsecond\taaaaaaaaaaaa\tpaper\tlatest.json", output.getvalue())
+        update.assert_not_called()
+        self.assertEqual(start.call_args.args[3], "")
+        with mock.patch.object(kb_store, "source_head") as head, self.assertRaisesRegex(ValueError, "paper-kb"):
+            kb_cli.main(["create", "paper", "--store", "second"])
+        head.assert_not_called()
+
+    def test_named_paper_leaves_latest_unbuilt(self):
+        run = self.fixture()
+        with contextlib.redirect_stdout(io.StringIO()):
+            kb_cli.main(["publish-paper", "paper", "--run", str(run), "--store", "second", "--file", "v1"])
+        named = kb_store.find_kb(self.config, "paper", "second", filename="v1.json")
+        self.assertEqual(load_items(named["jsonl"]), self.blobs[:3])
+        with self.assertRaisesRegex(ValueError, "未作成"):
+            kb_store.find_kb(self.config, "paper", "second")
+
+    def test_incomplete_paper_is_not_published(self):
+        run = self.fixture()
+        (run / "kb.json").write_text(json.dumps(self.blobs[:1]))
+        with mock.patch.object(kb_store, "publish") as publish, self.assertRaisesRegex(ValueError, "blob数"):
+            kb_cli.main(["publish-paper", "paper", "--run", str(run)])
+        publish.assert_not_called()

@@ -44,6 +44,10 @@ def read_config():
     return json.loads(CONFIG.read_text()) if CONFIG.exists() else {"stores": []}
 
 
+def source_revision(info):
+    return info.get("source_sha256") if info.get("source_kind") == "paper" else info.get("source_commit")
+
+
 def write_config(config):
     CONFIG.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.NamedTemporaryFile(dir=CONFIG.parent, mode="w", delete=False) as output:
@@ -106,7 +110,9 @@ def find_kb(config, name, selected=None, *, download=True, filename="latest.json
         info = json.loads(git(repo, "show", f"{revision}:{name}/{metadata}").stdout)
         destination = None
         if download:
-            if not info.get("source_commit"):
+            if not source_revision(info):
+                if info.get("source_kind") == "paper":
+                    raise ValueError(f"論文KBは未作成です。paper-kbで作成し、kb publish-paper {name} で保存してください")
                 raise ValueError(f"KBは登録済みですが未作成です。kb create {name} で作成してください")
             actual = snapshot_filename(repo, revision, name, filename)
             raw = git(repo, "show", f"{revision}:{name}/{actual}", text=False).stdout
@@ -165,6 +171,8 @@ def publish(store, name, info, jsonl=None, *, create_only=False, filename="lates
         files = []
         if filename not in ("latest.json", "latest.jsonl") and not (directory / "info.json").exists():
             registration = {**info, "source_commit": None}
+            if info.get("source_kind") == "paper":
+                registration["source_sha256"] = None
             (directory / "info.json").write_text(json.dumps(registration, ensure_ascii=False, indent=2) + "\n")
             files.append(f"{name}/info.json")
         (directory / metadata).write_text(json.dumps(info, ensure_ascii=False, indent=2) + "\n")
@@ -181,8 +189,9 @@ def publish(store, name, info, jsonl=None, *, create_only=False, filename="lates
         git(repo, "add", "--", *files)
         if git(repo, "diff", "--cached", "--quiet", check=False).returncode == 0:
             return git(repo, "rev-parse", "HEAD").stdout.strip()
-        message = (f"Update {name}/{filename} KB at {info['source_commit'][:12]}"
-                   if info.get("source_commit") else f"Register {name} KB")
+        revision = source_revision(info)
+        message = (f"Update {name}/{filename} KB at {revision[:12]}"
+                   if revision else f"Register {name} KB")
         git(repo, "commit", "--quiet", "-m", message)
         git(repo, "push", "--quiet", "origin", f"HEAD:refs/heads/{branch}")
         return git(repo, "rev-parse", "HEAD").stdout.strip()

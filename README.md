@@ -89,6 +89,26 @@ kb list
 
 ## Gitに保存したKBを `kb codex` で開く
 
+### paper-kb の論文KBを同じ保存先で使う
+
+完成した `paper-kb` の出力ディレクトリを指定すると、引用blob＋本論文blobの列を
+同じ保存先へcommit/pushできます。再圧縮は行いません。
+
+```bash
+kb publish-paper my-paper --run /path/to/paper-kb/runs/my-paper --store research
+kb list --store research
+kb codex my-paper --store research
+kb codex my-paper --store research --remote
+```
+
+`--file v1` で名前付き保存も可能です。保存するのは `latest.json`（blob列）と
+`info.json`（論文種別・入力SHA256・引用数・本論文blob数・生成設定）です。
+接続先キー・アカウント一覧・作成者のセッション設定は保存しません。
+論文KBには元Gitリポジトリが必須ではないため、起動時のGit差分確認は行いません。
+再作成は `paper-kb` で行い、再度publishします。`kb create` や
+`kb codex --rebuild always` は論文KBでは使用しません。
+
+
 ### 号池から推論時だけKBを挿入する
 
 ```bash

@@ -11,7 +11,7 @@ import uuid
 
 import kb_codex
 import kb_store as store
-from kb_items import dump_items
+from kb_items import dump_items, load_items
 from kb_api import COMPACTION_TYPES
 from kb_fork_mint import CHARTER
 
@@ -97,12 +97,42 @@ def create_kb(name, loaded, commit, config, filename="latest.json"):
     return jsonl
 
 
+def publish_paper(args, config):
+    run = args.run.expanduser().resolve()
+    manifest = json.loads((run / "manifest.json").read_text())
+    result = json.loads((run / "result.json").read_text())
+    snapshot = run / "kb.json"
+    items = load_items(snapshot)
+    references, main = result["references"], result["main_blobs"]
+    if (not isinstance(references, int) or not isinstance(main, int)
+            or references < 1 or main < 1 or len(items) != references + main
+            or result.get("items") != len(items)
+            or any(item.get("type") not in COMPACTION_TYPES for item in items)):
+        raise ValueError("paper-kbの完了結果とblob数が一致しません")
+    source_hash = manifest["source_sha256"]
+    if not isinstance(source_hash, str) or not re.fullmatch(r"[0-9a-f]{64}", source_hash):
+        raise ValueError("paper-kbの入力ハッシュが不正です")
+    info = {"source_kind": "paper", "source_sha256": source_hash,
+            "references": references, "main_blobs": main,
+            "build": {key: manifest[key] for key in ("model", "effort", "budget", "chunk_tokens") if key in manifest}}
+    selected = store.configured_stores(config, args.store)[0]
+    revision = store.publish(selected, args.name, info, snapshot, filename=args.file)
+    print(f"論文KBを保存しました: {args.name}/{args.file} / store: {selected['name']} / {revision}")
+
+
 def launch(args, config):
     loaded = store.find_kb(config, args.name, args.store, filename=args.file)
     info, jsonl = loaded["info"], loaded["jsonl"]
     print(f"KB: {args.name}/{args.file} / store: {loaded['store']['name']}", flush=True)
-    print(f"source: {info['repository_url']}@{info['source_commit']}", flush=True)
-    head, context = store.source_update(info)
+    paper = info.get("source_kind") == "paper"
+    if paper:
+        print(f"source: paper / SHA256 {info['source_sha256']} / 引用 {info['references']} / 本論文blob {info['main_blobs']}", flush=True)
+        if args.rebuild == "always":
+            raise ValueError("論文KBの再作成はpaper-kbを実行し、--publishで保存してください")
+        head, context = None, ""
+    else:
+        print(f"source: {info['repository_url']}@{info['source_commit']}", flush=True)
+        head, context = store.source_update(info)
     if context:
         print(f"branch: {info['branch']} / KB: {info['source_commit'][:12]} → HEAD: {head[:12]}", flush=True)
         if should_rebuild(args.rebuild):
@@ -110,7 +140,7 @@ def launch(args, config):
             context = ""
         else:
             print(f"再作成せず更新差分を追加します: {len(context.encode()):,} bytes", flush=True)
-    else:
+    elif not paper:
         print("KBは基準ブランチと同じcommitです。", flush=True)
     workspace = Path(args.workspace).expanduser().resolve()
     options = {}
@@ -158,6 +188,10 @@ def main(argv=None):
     publish.add_argument("--source-commit", required=True)
     publish.add_argument("--branch", required=True)
     publish.add_argument("--kb", "--jsonl", dest="jsonl", metavar="PATH", type=Path, required=True)
+    paper_publish = commands.add_parser("publish-paper", help="paper-kbの完成結果を共通保存先に保存")
+    paper_publish.add_argument("name", type=store.name_value)
+    paper_publish.add_argument("--run", type=Path, required=True)
+    paper_publish.add_argument("--store")
     codex = commands.add_parser("codex", help="KBを取得して新規Codexセッションを起動")
     codex.add_argument("name", type=store.name_value)
     codex.add_argument("--store")
@@ -169,7 +203,7 @@ def main(argv=None):
     codex.add_argument("--no-yolo", action="store_true")
     codex.add_argument("--prompt")
     codex.add_argument("--remote", action="store_true", help="号池にKBを登録し、推論時だけ挿入する")
-    for command in (creation, publish, codex):
+    for command in (creation, publish, paper_publish, codex):
         command.add_argument("--file", default="latest.json", type=file_argument,
                              help="KBファイル名（.jsonは省略可、既定: latest.json、旧.jsonlも読込可、同名は上書き）")
     args = parser.parse_args(argv)
@@ -178,6 +212,8 @@ def main(argv=None):
         register(args, config)
     elif args.command == "create":
         loaded = store.find_kb(config, args.name, args.store, download=False)
+        if loaded["info"].get("source_kind") == "paper":
+            raise ValueError("論文KBはpaper-kbで作成し、--publishで保存してください")
         create_kb(args.name, loaded, store.source_head(loaded["info"]), config, args.file)
     elif args.command == "store":
         entries = config.setdefault("stores", [])
@@ -202,12 +238,15 @@ def main(argv=None):
             for filename in store.git(repo, "ls-tree", "-r", "--name-only", "-z", revision).stdout.split("\0"):
                 if filename.count("/") == 1 and (filename.endswith("/info.json") or filename.endswith(".info.json")):
                     info = json.loads(store.git(repo, "show", f"{revision}:{filename}").stdout)
-                    commit = info.get("source_commit")
+                    commit = store.source_revision(info)
                     name, metadata = filename.split("/")
                     jsonl_name = "latest.json" if metadata == "info.json" else metadata.removesuffix(".info.json") + ".json"
                     if commit:
                         jsonl_name = store.snapshot_filename(repo, revision, name, jsonl_name)
-                    print(f"{name}\t{entry['name']}\t{commit[:12] if commit else '未作成'}\t{info['branch']}\t{jsonl_name}")
+                    branch = "paper" if info.get("source_kind") == "paper" else info["branch"]
+                    print(f"{name}\t{entry['name']}\t{commit[:12] if commit else '未作成'}\t{branch}\t{jsonl_name}")
+    elif args.command == "publish-paper":
+        publish_paper(args, config)
     elif args.command == "publish":
         info = {"repository_url": args.repository_url, "source_commit": args.source_commit, "branch": args.branch}
         selected = store.configured_stores(config, args.store)[0]
