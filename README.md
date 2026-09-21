@@ -180,8 +180,11 @@ KB本体をローカルのCodex履歴に入れず、号池が推論要求の先�
 Gitの更新確認・再作成の質問・再作成しない場合の差分追加は、通常の `kb codex` と共通。
 `--app`、`--session-only`、`--prompt`、`--file` も併用できる。
 
-接続には既存の `~/.config/kb/config.json` の `build_args` にある `--origin`、`--key-file`、
-必要なら `--private-http` を使う。既存の `KB_POOL_*` でも指定でき、Codexの環境変数を設定することはない。
+接続には既存の `~/.config/kb/config.json` の `build_args` にある `--pool-config` で
+号池の共通JSON（例: `codex-account-pool/bridge.json`）を指定できる。
+既存の `--origin`、`--key-file`、必要なら `--private-http` と `KB_POOL_*` も使える。
+`pool-rr` が渡す `KB_POOL_ORIGIN`、`KB_POOL_KEY_FILE`、`KB_POOL_PRIVATE_HTTP` は保存済みの指定より優先する。
+Codexの環境変数を設定することはない。
 新しい接続設定は不要。**Macの透過ブリッジが同じ号池へ接続していること**と、
 Remote KB対応版の `codex-account-pool` が必要。登録エラーの場合、最初のターンは送信しない。
 
@@ -275,6 +278,42 @@ kb publish octane --store work \
 `kb create` と起動時の再作成で使用するビルダーの引数は、同ファイルの `build_args` で指定します。
 キー本体は設定や保存先リポジトリに入れず、ローカルのキーファイルを指定してください。
 
+**号池の `bridge.json` があるPCでは、接続情報を複製せず、そのファイルを参照できます。**
+既存の `stores` は残したまま、`build_args` の接続設定を次のようにします。
+
+```json
+{
+  "stores": [],
+  "build_args": [
+    "--pool-config", "~/codex-account-pool/bridge.json",
+    "--workers", "12"
+  ]
+}
+```
+
+共通JSONでは `origin`、`private_http`、`key_file` を読みます。`key_file` がなければ
+`state_dir/client.key`、`state_dir` もなければ `state/client.key` を使います。
+`key_file` と `state_dir` の相対パスは共通JSONがあるディレクトリを基準にし、`~` も展開します。
+たとえば次のJSONは、その隣の `state/client.key` を読みます。
+
+```json
+{
+  "origin": "https://your-pool.example",
+  "private_http": false,
+  "state_dir": "state"
+}
+```
+
+接続時にJSONを読み直すため、同じファイルの `origin` を変更すると後続の接続へ反映されます。
+明示したJSONが存在しない場合はエラーになります。環境変数 `KB_POOL_CONFIG` でも指定できます。
+ビルダーではCLIの `--pool-config` が `KB_POOL_CONFIG` より優先します。
+接続各項目の優先順位は **明示した `--origin` / `--key-file` / `--private-http` →
+`KB_POOL_ORIGIN` / `KB_POOL_KEY_FILE` / `KB_POOL_PRIVATE_HTTP` → 共通JSON** です。
+Remote KBでは、ラッパーの接続先と一致させるため `KB_POOL_*` を `build_args` より優先します。
+`KB_POOL_PRIVATE_HTTP=0` でJSONの `private_http: true` を上書きできます。
+
+共通JSONを使わず直接指定する従来の設定も利用できます。
+
 **初回は各PCで次の設定を行ってください。**
 
 1. 設定ディレクトリを作ります。
@@ -341,6 +380,15 @@ Aiderの同じオプションで呼ばれる解析・ランキング・表示処
 
 ## リポジトリからKBを作る
 
+号池と共通の接続設定を使う場合:
+
+```bash
+uv run python kb_repo_url.py https://github.com/owner/repository.git \
+  --name my-kb --pool-config ~/codex-account-pool/bridge.json
+```
+
+接続先とキーの場所を直接指定する場合:
+
 ```bash
 uv run python kb_repo_url.py https://github.com/owner/repository.git \
   --name my-kb \
@@ -368,7 +416,7 @@ Codex用の `User-Agent` と `originator` も号池側で毎回付与します�
 KBが送るのはプール認証と `Content-Type: application/json`、`Accept: text/event-stream` です。
 WebSocket専用ヘッダーや一時的なセッションIDは、このHTTP/SSE経路にはコピーしません。
 
-このツール用の `KB_POOL_ORIGIN`、`KB_POOL_KEY_FILE`、`KB_POOL_PRIVATE_HTTP=1` でも指定できます。
+このツール用の `KB_POOL_CONFIG`、`KB_POOL_ORIGIN`、`KB_POOL_KEY_FILE`、`KB_POOL_PRIVATE_HTTP=1` でも指定できます。
 Codex側の設定・ログイン・環境変数を変更する処理はありません。
 
 ### 作成の流れ

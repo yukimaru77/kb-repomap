@@ -19,12 +19,38 @@ CHARTER = ("あなたはKB(知識ベース)である。与えられる文書を�
            "要約を求められたら核心を落とさない。")
 INTRO = "今からあなたに文書群を渡すので、全て精読してください。"
 
+def pool_config_defaults(path):
+    """Read shared connection settings afresh; paths belong to that JSON file."""
+    path = Path(path).expanduser().resolve()
+    try:
+        data = json.loads(path.read_text())
+    except (OSError, ValueError) as error:
+        raise ValueError(f"failed to read pool config {path}: {error}") from error
+    if not isinstance(data, dict):
+        raise ValueError("pool config must be a JSON object")
+    for field in ("origin", "key_file", "state_dir"):
+        if field in data and not isinstance(data[field], str):
+            raise ValueError(f"pool config {field} must be a string")
+    if "private_http" in data and not isinstance(data["private_http"], bool):
+        raise ValueError("pool config private_http must be true or false")
+    key_path = Path(data.get("key_file") or str(Path(data.get("state_dir") or "state") / "client.key")).expanduser()
+    if not key_path.is_absolute():
+        key_path = path.parent / key_path
+    return {"KB_POOL_ORIGIN": data.get("origin", ""),
+            "KB_POOL_KEY_FILE": str(key_path),
+            "KB_POOL_PRIVATE_HTTP": "1" if data.get("private_http", False) else "0"}
+
+
 def pool_configuration(environ=None):
     environ = os.environ if environ is None else environ
+    if environ.get("KB_POOL_CONFIG"):
+        # Explicit environment/CLI fields override the shared JSON. Do not cache:
+        # a later compact call must observe a changed bridge origin or key path.
+        environ = {**pool_config_defaults(environ["KB_POOL_CONFIG"]), **environ}
     origin = environ.get("KB_POOL_ORIGIN", "").rstrip("/")
     key_file = environ.get("KB_POOL_KEY_FILE", "")
     if not origin or not key_file:
-        raise ValueError("set KB_POOL_ORIGIN and KB_POOL_KEY_FILE, or use --origin and --key-file")
+        raise ValueError("set KB_POOL_CONFIG/--pool-config, or KB_POOL_ORIGIN and KB_POOL_KEY_FILE (--origin and --key-file)")
     parsed = urlparse(origin)
     if (parsed.scheme not in {"http", "https"} or not parsed.hostname
             or parsed.username is not None or parsed.password is not None

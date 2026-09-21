@@ -11,12 +11,15 @@ from kb_items import load_items
 
 class RemoteKB:
     def __init__(self, config, jsonl):
-        parser = argparse.ArgumentParser(add_help=False)
+        parser = argparse.ArgumentParser(add_help=False, allow_abbrev=False)
+        parser.add_argument("--pool-config")
         parser.add_argument("--origin")
         parser.add_argument("--key-file")
         parser.add_argument("--private-http", action="store_true")
         args, _ = parser.parse_known_args(config.get("build_args", []))
         environ = dict(os.environ)
+        if args.pool_config is not None:
+            environ.setdefault("KB_POOL_CONFIG", args.pool_config)
         if args.origin:
             environ.setdefault("KB_POOL_ORIGIN", args.origin)
         if args.key_file:

@@ -204,6 +204,7 @@ def main():
     parser.add_argument("--reading-instructions-file", help="UTF-8 file replacing each pack's reading instructions")
     parser.add_argument("--instructions-file", help="UTF-8 file replacing first/second-stage compaction API instructions")
     parser.add_argument("--map-tokens", type=int, help="repository map token budget (default: 10000)")
+    parser.add_argument("--pool-config", help="shared pool connection JSON; or KB_POOL_CONFIG")
     parser.add_argument("--origin", help="pool origin, without /v1; or KB_POOL_ORIGIN")
     parser.add_argument("--key-file", help="pool client key file; or KB_POOL_KEY_FILE")
     parser.add_argument("--private-http", action="store_true", help="origin is inside a verified private tunnel")
@@ -242,6 +243,8 @@ def main():
     args = parser.parse_args()
 
     config = load_config(Path(args.config).expanduser().resolve())
+    if args.pool_config is not None:
+        os.environ["KB_POOL_CONFIG"] = str(Path(args.pool_config).expanduser().resolve())
     if args.origin:
         os.environ["KB_POOL_ORIGIN"] = args.origin
     if args.key_file:
@@ -250,6 +253,9 @@ def main():
         os.environ["KB_POOL_PRIVATE_HTTP"] = "1"
     if not args.dry_run and not args.map_only:
         kb_api.pool_configuration()
+    elif os.environ.get("KB_POOL_CONFIG"):
+        # Planning needs no key/API, but an explicitly named config must exist.
+        kb_api.pool_config_defaults(os.environ["KB_POOL_CONFIG"])
     map_tokens = args.map_tokens if args.map_tokens is not None else config["map_tokens"]
     model = args.model or config["model"]
     effort = args.effort or config["effort"]
