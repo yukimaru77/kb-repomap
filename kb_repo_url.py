@@ -39,17 +39,11 @@ def safe_slug(url):
 
 
 def validate_source(value):
-    path = Path(value).expanduser()
-    if path.exists():
-        return str(path.resolve())
-    if value.startswith("git@") or value.startswith("ssh://"):
-        return value
-    parsed = urlparse(value)
-    if parsed.scheme not in {"https", "http", "git"} or not parsed.netloc:
-        raise SystemExit("repository must be a local path or an http(s), ssh, git, or git@ URL")
-    if parsed.username or parsed.password:
-        raise SystemExit("do not embed credentials in the URL; use your Git credential helper")
-    return value
+    from kb_source import source_address
+    try:
+        return source_address(value)
+    except ValueError as error:
+        raise SystemExit(str(error)) from error
 
 
 def clone_repository(source, destination, ref):

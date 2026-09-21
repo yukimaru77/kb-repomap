@@ -20,13 +20,14 @@ class PaperStoreTest(unittest.TestCase):
         run.mkdir()
         (run / "kb.json").write_text(json.dumps(self.blobs[:3]))
         (run / "manifest.json").write_text(json.dumps({"source_sha256": "a" * 64,
+            "source_git": {"repository_url": str(self.source), "source_commit": self.base, "branch": "main", "subdir": "."},
             "model": "gpt-6-astra", "effort": "low", "budget": 150000,
             "accounts": ["private-account"], "key_file": "private-key-path"}))
         (run / "result.json").write_text(json.dumps({"references": 2, "main_blobs": 1, "items": 3}))
         kb_store.write_config(self.config)
         return run
 
-    def test_paper_publish_list_launch_without_repository_fetch(self):
+    def test_paper_publish_list_launch_checks_git_without_code_rebuild(self):
         run = self.fixture()
         with contextlib.redirect_stdout(io.StringIO()):
             kb_cli.main(["publish-paper", "paper", "--run", str(run), "--store", "second"])
@@ -40,7 +41,8 @@ class PaperStoreTest(unittest.TestCase):
              mock.patch.object(kb_cli.kb_codex, "start_session", return_value="paper-id") as start:
             kb_cli.main(["list", "--store", "second"])
             kb_cli.main(["codex", "paper", "--store", "second", "--session-only"])
-        self.assertIn("paper\tsecond\taaaaaaaaaaaa\tpaper\tlatest.json", output.getvalue())
+        self.assertIn(f"paper\tsecond\t{self.base[:12]}\tpaper\tlatest.json", output.getvalue())
+        self.assertIn("元Gitに更新があります", output.getvalue())
         update.assert_not_called()
         self.assertEqual(start.call_args.args[3], "")
         with mock.patch.object(kb_store, "source_head") as head, self.assertRaisesRegex(ValueError, "paper-kb"):
@@ -60,5 +62,14 @@ class PaperStoreTest(unittest.TestCase):
         run = self.fixture()
         (run / "kb.json").write_text(json.dumps(self.blobs[:1]))
         with mock.patch.object(kb_store, "publish") as publish, self.assertRaisesRegex(ValueError, "blob数"):
+            kb_cli.main(["publish-paper", "paper", "--run", str(run)])
+        publish.assert_not_called()
+
+    def test_paper_requires_git_provenance(self):
+        run = self.fixture()
+        manifest = json.loads((run / "manifest.json").read_text())
+        del manifest["source_git"]
+        (run / "manifest.json").write_text(json.dumps(manifest))
+        with mock.patch.object(kb_store, "publish") as publish, self.assertRaisesRegex(ValueError, "元Git"):
             kb_cli.main(["publish-paper", "paper", "--run", str(run)])
         publish.assert_not_called()

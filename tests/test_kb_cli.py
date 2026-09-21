@@ -316,11 +316,11 @@ class GitStoreTest(unittest.TestCase):
              contextlib.redirect_stdout(io.StringIO()):
             kb_cli.main(["register"])
         self.assertEqual([call.args[0] for call in prompt.call_args_list],
-                         ["KB名: ", "元リポジトリのURL: ", "基準ブランチ [main]: ", "保存先GitリポジトリのURL: "])
+                         ["KB名: ", "元Gitリポジトリ（URL / host:/絶対パス）: ", "基準ブランチ [main]: ", "保存先GitリポジトリのURL: "])
         config = kb_store.read_config()
         self.assertEqual(config["stores"], [{"name": "store2", "url": self.store2["url"]}])
         loaded = kb_store.find_kb(config, "example", download=False)
-        self.assertEqual(loaded["info"], {"repository_url": str(self.source), "source_commit": None, "branch": "feature/kb"})
+        self.assertEqual(loaded["info"], {"repository_url": str(self.source.resolve()), "source_commit": None, "branch": "feature/kb"})
         self.assertIsNone(loaded["jsonl"])
         self.assertEqual(kb_store.git(self.store2["url"], "ls-tree", "--name-only", "main:example").stdout.splitlines(), ["info.json"])
         output = io.StringIO()

@@ -1,5 +1,14 @@
 # kb-repomap
 
+元リポジトリはGit URLのほか、SSHマシン名＋絶対パスでも登録できます。
+SSH別名・鍵は通常のGit/SSH設定を使います。対象のコミット済みデータを取得します。
+
+```bash
+kb register my-code --source https://github.com/owner/repository.git --branch main
+kb register my-code --host user@server --path /home/user/repository --branch main
+# 対話入力にも server:/absolute/path 形式を指定可能
+```
+
 Gitリポジトリを **Aiderの構造マップ → v2圧縮blob → 持ち運べるKB** にするツールです。
 保存するのはKB項目のJSON配列だけです。利用時に、そのPCのCodex設定で新しいセッションを作ります。
 
@@ -102,9 +111,11 @@ kb codex my-paper --store research --remote
 ```
 
 `--file v1` で名前付き保存も可能です。保存するのは `latest.json`（blob列）と
-`info.json`（論文種別・入力SHA256・引用数・本論文blob数・生成設定）です。
+`info.json`（論文種別・元Git URL・コミット・ブランチ・論文サブディレクトリ・入力SHA256・引用数・本論文blob数・生成設定）です。
 接続先キー・アカウント一覧・作成者のセッション設定は保存しません。
-論文KBには元Gitリポジトリが必須ではないため、起動時のGit差分確認は行いません。
+論文KBも元Gitリポジトリを必須とし、保存時に指定コミットを取得できることを確認します。
+起動時は基準ブランチの更新を確認し、更新があれば再作成方法を表示します。
+本文・図を読み直す必要があるため、コード用の差分追加で論文KBを自動更新しません。
 再作成は `paper-kb` で行い、再度publishします。`kb create` や
 `kb codex --rebuild always` は論文KBでは使用しません。
 

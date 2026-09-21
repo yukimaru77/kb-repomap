@@ -45,7 +45,7 @@ def read_config():
 
 
 def source_revision(info):
-    return info.get("source_sha256") if info.get("source_kind") == "paper" else info.get("source_commit")
+    return info.get("source_commit") or (info.get("source_sha256") if info.get("source_kind") == "paper" else None)
 
 
 def write_config(config):
@@ -128,8 +128,14 @@ def find_kb(config, name, selected=None, *, download=True, filename="latest.json
 def source_head(info):
     repo = cached_repo(info["repository_url"], "sources")
     git(repo, "fetch", "--quiet", "--no-tags", "origin",
-        f"+refs/heads/{info['branch']}:refs/heads/target")
+        "+HEAD:refs/heads/target" if info["branch"] == "HEAD" else f"+refs/heads/{info['branch']}:refs/heads/target")
     return git(repo, "rev-parse", "refs/heads/target").stdout.strip()
+
+
+def verify_source_commit(info):
+    repo = cached_repo(info["repository_url"], "sources")
+    git(repo, "fetch", "--quiet", "--no-tags", "origin", info["source_commit"])
+    git(repo, "cat-file", "-e", info["source_commit"] + "^{commit}")
 
 
 def source_update(info):

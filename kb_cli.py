@@ -14,6 +14,7 @@ import kb_store as store
 from kb_items import dump_items, load_items
 from kb_api import COMPACTION_TYPES
 from kb_fork_mint import CHARTER
+from kb_source import source_address
 
 
 ROOT = Path(__file__).resolve().parent
@@ -62,8 +63,10 @@ def prompt_value(label, default=None):
 
 def register(args, config):
     name = args.name or store.name_value(prompt_value("KB名"))
-    repository_url = prompt_value("元リポジトリのURL")
-    branch = prompt_value("基準ブランチ", "main")
+    source = getattr(args, "source", None)
+    host, path = getattr(args, "host", None), getattr(args, "path", None)
+    repository_url = source_address(source or (prompt_value("元Gitリポジトリ（URL / host:/絶対パス）") if not host and not path else None), host=host, path=path)
+    branch = getattr(args, "branch", None) or prompt_value("基準ブランチ", "main")
     entries = config.setdefault("stores", [])
     for entry in entries:
         print(f"保存先 {entry['name']}: {entry['url']}")
@@ -112,9 +115,17 @@ def publish_paper(args, config):
     source_hash = manifest["source_sha256"]
     if not isinstance(source_hash, str) or not re.fullmatch(r"[0-9a-f]{64}", source_hash):
         raise ValueError("paper-kbの入力ハッシュが不正です")
+    source_git = manifest.get("source_git") or {}
+    commit = source_git.get("source_commit", "")
+    if not re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", commit) or not source_git.get("repository_url"):
+        raise ValueError("論文KBには元Gitリポジトリとコミットが必要です。新版paper-kbで出力を更新してください")
     info = {"source_kind": "paper", "source_sha256": source_hash,
+            "repository_url": source_address(source_git["repository_url"]),
+            "source_commit": commit, "branch": source_git.get("branch"),
+            "subdir": source_git.get("subdir", "."),
             "references": references, "main_blobs": main,
             "build": {key: manifest[key] for key in ("model", "effort", "budget", "chunk_tokens") if key in manifest}}
+    store.verify_source_commit(info)
     selected = store.configured_stores(config, args.store)[0]
     revision = store.publish(selected, args.name, info, snapshot, filename=args.file)
     print(f"論文KBを保存しました: {args.name}/{args.file} / store: {selected['name']} / {revision}")
@@ -130,6 +141,13 @@ def launch(args, config):
         if args.rebuild == "always":
             raise ValueError("論文KBの再作成はpaper-kbを実行し、--publishで保存してください")
         head, context = None, ""
+        if info.get("repository_url") and info.get("source_commit"):
+            print(f"Git: {info['repository_url']}@{info['source_commit']} / {info.get('subdir', '.')}", flush=True)
+            head = store.source_head(info) if info.get("branch") else info["source_commit"]
+            if head != info["source_commit"]:
+                print("元Gitに更新があります。保存済みの論文KBで開始します。更新する場合はpaper-kbで再作成・保存してください。", flush=True)
+        else:
+            print("旧形式の論文KBです。次回保存時にはGit入力から再作成してください。", flush=True)
     else:
         print(f"source: {info['repository_url']}@{info['source_commit']}", flush=True)
         head, context = store.source_update(info)
@@ -167,6 +185,10 @@ def main(argv=None):
     commands = parser.add_subparsers(dest="command", required=True)
     registration = commands.add_parser("register", help="URL・ブランチ・保存先を対話登録")
     registration.add_argument("name", nargs="?", type=store.name_value, help="KB名（省略すると質問）")
+    registration.add_argument("--source", help="元Git URLまたはローカルGitパス")
+    registration.add_argument("--host", help="SSHマシン名（user@hostやSSH別名）")
+    registration.add_argument("--path", help="SSH先のGitリポジトリ絶対パス")
+    registration.add_argument("--branch", help="基準ブランチ（省略時は質問）")
     creation = commands.add_parser("create", help="登録済みKBを基準ブランチから作成・保存")
     creation.add_argument("name", type=store.name_value)
     creation.add_argument("--store")
