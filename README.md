@@ -38,7 +38,7 @@ bash install.sh
 kb register xx   # 対話で登録
 kb create xx     # 基準ブランチからKBを作成し、保存先へcommit/push
 kb list          # 登録済みKBと作成状態を一覧表示
-kb codex xx      # KB入りの新規Codexセッションを開く
+kb xx codex      # KB入りの新規Codexセッションを開く
 ```
 
 `kb register` は次を質問します。KB名を引数で渡した場合、名前の質問は省略します。
@@ -121,6 +121,48 @@ kb codex my-paper --store research --remote
 
 
 ### 号池から推論時だけKBを挿入する
+
+新しい起動構文は `kb <KB名> [KBオプション] codex [Codexの引数...]` です。
+`codex` より後はCodex自身が解釈します。KB用の `--remote`・`--store`・`--file`・
+`--rebuild` は `codex` より前に置きます。
+
+```bash
+# TUI
+kb octane --remote codex -m gpt-6-astra
+# 非対話実行、JSONLイベント、最終回答の保存
+kb octane --remote codex exec --json -o answer.txt "設計を説明して"
+# ラウンドロビンと併用
+pool-rr kb octane --remote codex exec -m gpt-6-astra "レビューして"
+# 標準入力はCodexへそのまま渡す
+cat question.txt | pool-rr kb octane --remote codex exec -
+# Codexのreviewやヘルプもそのまま
+kb octane --remote codex review --uncommitted
+kb octane --remote codex exec --help
+```
+
+新構文の `--remote` は、号池にKBの親bindingを登録し、起動するCodexプロセスだけに
+親IDのヘッダーを設定します。Codexが作った本来のセッションへ号池がKBを継承・保存するため、
+`exec` を `exec resume` に変換せず実行します。最初の余分な推論もありません。
+通常は号池のfill-first経路、`pool-rr` 付きならRR経路を使用します。
+モデル一覧は通常のCodexが保存した `~/.codex/models_cache.json`（`CODEX_HOME`対応）を使います。
+起動時のKB診断はstderrへ出し、stdout・stdin・終了コードはCodexのままです。
+Codexの永続設定・ログイン状態は変更しません。provider自体を別サービスへ変える
+`-c model_provider=...` などとは併用しないでください。既存セッションに別のKBが
+登録済みの場合、その既存bindingが優先されます。
+
+`--remote` を省略したローカルKBでは、KBを注入したセッションを作り、TUIまたは
+`exec resume` で起動します。Codexのオプションはインストール済みCLIのヘルプから
+判別して渡します。`review` や既存セッションを指定する `resume`・`fork` には
+`--remote` を使ってください。`--ephemeral` を指定しても、ローカルKBを注入する
+準備用セッションは保存されます。
+ローカル方式の準備時には `-c` と `-m` を適用しますが、`-p` や
+`--ignore-user-config` などで初期プロンプトの設定まで完全に切り替える場合は
+`--remote` を使ってください。
+
+新構文では再作成の既定値は `--rebuild never`。元コードの更新差分はKBとともに渡し、
+対話入力を先に消費しません。再作成したい場合は `--rebuild always` を明示します。
+
+従来の `kb codex <KB名> ...` も互換用に利用できます。
 
 ```bash
 kb codex octane --remote

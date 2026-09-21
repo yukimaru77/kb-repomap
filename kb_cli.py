@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Create and open repository KBs stored in user-selected Git repositories."""
 import argparse
+import contextlib
 import json
 import os
 from pathlib import Path
@@ -132,6 +133,14 @@ def publish_paper(args, config):
 
 
 def launch(args, config):
+    # Keep exec stdout exclusively for Codex output (including --json events).
+    if hasattr(args, "native_args"):
+        with contextlib.redirect_stdout(sys.stderr):
+            return _launch(args, config)
+    return _launch(args, config)
+
+
+def _launch(args, config):
     loaded = store.find_kb(config, args.name, args.store, filename=args.file)
     info, jsonl = loaded["info"], loaded["jsonl"]
     print(f"KB: {args.name}/{args.file} / store: {loaded['store']['name']}", flush=True)
@@ -161,6 +170,9 @@ def launch(args, config):
     elif not paper:
         print("KBは基準ブランチと同じcommitです。", flush=True)
     workspace = Path(args.workspace).expanduser().resolve()
+    if hasattr(args, "native_args"):
+        from kb_native import run
+        return run(args, config, jsonl, workspace, context)
     options = {}
     if getattr(args, "remote", False):
         from kb_remote import RemoteKB
@@ -173,7 +185,7 @@ def launch(args, config):
     if args.app:
         subprocess.run(["open", f"codex://threads/{session_id}"], check=True)
         return session_id
-    command = ["codex", "resume"]
+    command = ["codex", "resume", *kb_codex.config_flags()]
     if not args.no_yolo:
         command.append("--dangerously-bypass-approvals-and-sandbox")
     command += ["-C", str(workspace), session_id]
@@ -181,7 +193,18 @@ def launch(args, config):
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(prog="kb")
+    argv = list(sys.argv[1:] if argv is None else argv)
+    management = {"register", "create", "store", "list", "publish", "publish-paper", "codex"}
+    if len(argv) > 1 and argv[0] not in management and "codex" in argv[1:]:
+        from kb_native import parse
+        args = parse(argv)
+        # Help/version are native operations and should work without a KB lookup.
+        option_args = args.native_args[:args.native_args.index("--")] if "--" in args.native_args else args.native_args
+        if any(value in ("--help", "-h", "--version", "-V") for value in option_args):
+            os.execvp("codex", ["codex", *args.native_args])
+            return
+        return launch(args, store.read_config())
+    parser = argparse.ArgumentParser(prog="kb", epilog="Codex起動: kb NAME [--remote] [KB options] codex [CODEX args...]")
     commands = parser.add_subparsers(dest="command", required=True)
     registration = commands.add_parser("register", help="URL・ブランチ・保存先を対話登録")
     registration.add_argument("name", nargs="?", type=store.name_value, help="KB名（省略すると質問）")

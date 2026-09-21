@@ -18,11 +18,11 @@ class RemoteKB:
         args, _ = parser.parse_known_args(config.get("build_args", []))
         environ = dict(os.environ)
         if args.origin:
-            environ["KB_POOL_ORIGIN"] = args.origin
+            environ.setdefault("KB_POOL_ORIGIN", args.origin)
         if args.key_file:
-            environ["KB_POOL_KEY_FILE"] = args.key_file
+            environ.setdefault("KB_POOL_KEY_FILE", args.key_file)
         if args.private_http:
-            environ["KB_POOL_PRIVATE_HTTP"] = "1"
+            environ.setdefault("KB_POOL_PRIVATE_HTTP", "1")
         base, self.key = pool_configuration(environ)
         self.origin = base.removesuffix("/_pool/rr")
         # Session metadata belongs to Codex. Only model-visible response items

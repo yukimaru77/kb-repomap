@@ -3,14 +3,23 @@
 Copyright (c) 2026 GMO Pepabo, Inc. See LICENSE.kb-cli.
 """
 import json
+import os
 import subprocess
 from kb_items import load_items
 
 
+def config_flags(overrides=()):
+    """Process-scoped options from pool-rr, followed by the caller's options."""
+    inherited = json.loads(os.environ.get("KB_CODEX_CONFIG_OVERRIDES", "[]"))
+    if not isinstance(inherited, list) or any(not isinstance(value, str) or "=" not in value for value in inherited):
+        raise ValueError("KB_CODEX_CONFIG_OVERRIDES must be a JSON array of key=value strings")
+    return [part for value in [*inherited, *overrides] for part in ("-c", value)]
+
+
 class CodexAppServer:
-    def __init__(self):
+    def __init__(self, overrides=()):
         self.process = subprocess.Popen(
-            ["codex", "app-server", "--listen", "stdio://"],
+            ["codex", "app-server", *config_flags(overrides), "--listen", "stdio://"],
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True, bufsize=1,
         )
         self.next_id = 0
@@ -94,14 +103,15 @@ class CodexAppServer:
         self.process.stdout.close()
 
 
-def start_session(jsonl, workspace, name, update_context, *, full_access=True, prompt=None, remote=None):
+def start_session(jsonl, workspace, name, update_context, *, full_access=True, prompt=None, remote=None,
+                  run_initial_turn=True, overrides=()):
     # Validate before starting Codex. Never import a producer's session metadata.
     items = load_items(jsonl) if remote is None else None
     if remote is not None:
         # thread/start may open a prewarm socket before returning its ID.
         # Register, persist the new empty thread, then close this app-server so
         # the first user turn opens a socket with the binding already in place.
-        with CodexAppServer() as bootstrap:
+        with (CodexAppServer(overrides) if overrides else CodexAppServer()) as bootstrap:
             session_id = bootstrap.start(workspace, full_access)
             remote.bind(session_id)
             # Naming an empty thread only updates its index; it does not create
@@ -114,15 +124,18 @@ def start_session(jsonl, workspace, name, update_context, *, full_access=True, p
                 ]}],
             })
             bootstrap.request("thread/name/set", {"threadId": session_id, "name": f"{name} Remote KBを活用する"})
-    with CodexAppServer() as server:
+        if not run_initial_turn:
+            return session_id
+    with (CodexAppServer(overrides) if overrides else CodexAppServer()) as server:
         if remote is None:
             session_id = server.start(workspace, full_access)
             server.request("thread/inject_items", {"threadId": session_id, "items": items})
         else:
             server.resume(session_id, workspace, full_access)
         # The new session uses the installed Codex and the caller's local config.
-        instruction = prompt or "今まで読んだ内容をふんだんに活用してください。"
-        first_turn = "\n\n".join(part for part in (update_context, instruction) if part)
-        server.run_turn(session_id, first_turn, workspace)
+        if run_initial_turn:
+            instruction = prompt or "今まで読んだ内容をふんだんに活用してください。"
+            first_turn = "\n\n".join(part for part in (update_context, instruction) if part)
+            server.run_turn(session_id, first_turn, workspace)
         server.request("thread/name/set", {"threadId": session_id, "name": f"{name} KBを活用する"})
     return session_id
