@@ -110,8 +110,23 @@ kb codex my-paper --store research
 kb codex my-paper --store research --remote
 ```
 
+公式資料付きの最終run（`report.json`形式）も同じコマンドで保存できます。
+本論文の先頭blobとcheckpoint、公式資料blob、両方の入力Gitのcommitと資料ハッシュを検証し、
+公開先にはblob列と必要な出典・件数だけを保存します。元runのmanifestやアカウント情報はコピーしません。
+入力Gitがローカルパスの場合は、元commitを履歴に保持した公開用Git URLを指定してください。
+
+```sh
+kb publish-paper my-paper --run /path/to/final-run --store research \
+  --source-repository-url https://github.com/OWNER/paper-sources.git \
+  --main-source-repository-url https://github.com/OWNER/paper-sources.git
+```
+
+前者は公式資料、後者は本論文の入力Gitです。指定先が元commitを取得できることを確認し、
+commitを固定して登録します。別の履歴の上流リポジトリを代わりに指定することはできません。
+元runや`result.json`を書き換える必要はありません。
+
 `--file v1` で名前付き保存も可能です。保存するのは `latest.json`（blob列）と
-`info.json`（論文種別・元Git URL・コミット・ブランチ・論文サブディレクトリ・入力SHA256・引用数・本論文blob数・生成設定）です。
+`info.json`（論文種別・元Git URL・コミット・ブランチ・論文サブディレクトリ・入力SHA256・引用資料数・引用blob数・本論文blob数・生成設定）です。
 接続先キー・アカウント一覧・作成者のセッション設定は保存しません。
 論文KBも元Gitリポジトリを必須とし、保存時に指定コミットを取得できることを確認します。
 起動時は基準ブランチの更新を確認し、更新があれば再作成方法を表示します。
@@ -125,6 +140,27 @@ kb codex my-paper --store research --remote
 新しい起動構文は `kb <KB名> [KBオプション] codex [Codexの引数...]` です。
 `codex` より後はCodex自身が解釈します。KB用の `--remote`・`--store`・`--file`・
 `--rebuild` は `codex` より前に置きます。
+
+通常起動・`--remote` ともに、次の英語の案内を `role: developer` で渡します。
+保存済みの暗号化blobは変更せず、旧「KB憲章」は起動時にこの案内へ置き換えます。
+新構文のRemote KBでは案内もbindingに含め、旧構文ではセッション側へ一度だけ挿入します。
+KBの準備だけでは user メッセージや推論を自動で開始しません。
+新構文の依頼文・標準入力はCodex自身へ渡し、旧構文は明示した `--prompt` だけを実行します。
+
+> The supplied compacted context is prior knowledge provided by the user. Use it as a foundation for subsequent understanding and work. When precise details are needed, use that knowledge to narrow down relevant sources and search them efficiently.
+
+保存先Gitリポジトリの各KBディレクトリに `dev.txt` を置くと、その内容も追加の
+`role: developer` メッセージとして渡します。例えば `molmoact2/latest.json` と
+同じ場所の `molmoact2/dev.txt` に、`./paper/paper.md (Full paper text in Markdown)`
+のような資料のパスと一言の説明を英語で記述できます。
+`dev.txt` はUTF-8のプレーンテキストで、同じKBフォルダ内の全バージョンに共通です。
+KBと同じ保存先commitから取得し、元資料のリポジトリや現在の作業ディレクトリにある
+`dev.txt` は自動では読みません。ファイルがない場合や空の場合は従来どおりです。
+
+新旧の起動構文・TUI・`exec`・`--app`・`--remote`・`pool-rr` で共通です。
+ローカル方式ではセッションへ挿入し、Remote方式では号池のbindingに含めます。
+暗号化blobや `latest.json` 自体は変更しません。編集を保存先へpushすると次回の
+新規起動から反映され、すでに起動したセッションの指示は変わりません。
 
 ```bash
 # TUI
@@ -244,10 +280,11 @@ KBと対応する作成情報を同じcommitで更新し、過去版はGit履歴
    - **No**: 既存KBに加えてcommit一覧とGit diffを使う。保存済みKBは更新しない。
 4. ローカルのCodex app-serverの `thread/start` で新しいセッションを作り、
    `inject_items` でKB項目を挿入する。システム指示などは利用者のローカル設定から構築する。
-   更新差分を**新しいセッションの最初の依頼**に渡す。
-5. 応答を待ち、そのセッションを `codex resume` で開く。
+   developer の事前知識ガイダンスと、必要な更新差分を保持する。
+5. そのセッションを `codex resume` で開く。`--prompt` がある場合だけ、
+   更新差分と指定した依頼文で最初の推論を実行し、応答を待ってから開く。
 
-起動時に推論が1回発生します。基準ブランチと同じcommitなら質問は出ません。
+`--prompt` を省略すると、起動時の推論は発生しません。基準ブランチと同じcommitなら質問は出ません。
 `--rebuild always` / `--rebuild never` で回答を指定できます。
 標準入力がEOFの場合は再作成せず差分を追加し、その旨を表示します。
 取得・再作成・保存に失敗した場合はエラーを表示し、黙って古い内容で起動しません。
@@ -455,7 +492,7 @@ mapは構造・識別子の抜粋で、従来のLLMによる業務・設計解�
 - `--no-mint`: Codexのセッションファイルを作らずblob生成まで。
 - `--prelude-file metadata.md`: 追加資料を別blobとして先頭へ置く。二段階圧縮の対象外。
 
-[config.yaml](config.yaml) の既定値は `gpt-6-astra / low`、最大12並列、map予算10K、
+[config.yaml](config.yaml) の既定値は `gpt-6-sol / medium`、最大12並列、map予算10K、
 一次パック予算150K、**二次圧縮なし**です。
 
 通常の作成コマンドに、必要な場合だけ次のどちらかを追加します。

@@ -13,6 +13,7 @@ import kb_cli
 import kb_codex
 from kb_remote import RemoteKB
 from kb_fork_mint import CHARTER
+from kb_items import guidance_item
 
 
 class RemoteKBTests(unittest.TestCase):
@@ -54,13 +55,17 @@ class RemoteKBTests(unittest.TestCase):
                     remote.bind("new-session")
                 self.assertEqual(dict(os.environ), before)
                 self.assertEqual(source.read_bytes(), original)
-                self.assertEqual(seen, [("/_pool/kb/bind", "Bearer test-key", {"session_id": "new-session", "items": items})])
+                expected_items = [guidance_item(), *items[:-1]]
+                self.assertEqual(seen, [("/_pool/kb/bind", "Bearer test-key", {"session_id": "new-session", "items": expected_items})])
                 portable = root / "latest.json"
                 portable.write_text(json.dumps(items))
                 with contextlib.redirect_stdout(io.StringIO()):
                     RemoteKB(config, portable).bind("portable-session")
                 self.assertEqual(seen[-1], ("/_pool/kb/bind", "Bearer test-key", {
-                    "session_id": "portable-session", "items": items}))
+                    "session_id": "portable-session", "items": expected_items}))
+                with contextlib.redirect_stdout(io.StringIO()):
+                    remote.bind("legacy-session", include_guidance=False)
+                self.assertEqual(seen[-1][2]["items"], items[:-1])
         finally:
             server.shutdown()
             server.server_close()
@@ -82,12 +87,10 @@ class RemoteKBTests(unittest.TestCase):
         self.assertEqual(result, "new-id")
         self.assertEqual(calls.method_calls[:6], [
             mock.call.bootstrap.start(Path("/work"), False),
-            mock.call.remote.bind("new-id"),
+            mock.call.remote.bind("new-id", include_guidance=False),
             mock.call.bootstrap.request("thread/inject_items", {
                 "threadId": "new-id",
-                "items": [{"type": "message", "role": "developer", "content": [
-                    {"type": "input_text", "text": "Remote KB is provided by the account pool for this session."}
-                ]}],
+                "items": [guidance_item()],
             }),
             mock.call.bootstrap.request("thread/name/set", {"threadId": "new-id", "name": "example Remote KBを活用する"}),
             mock.call.active.resume("new-id", Path("/work"), False),
@@ -107,6 +110,29 @@ class RemoteKBTests(unittest.TestCase):
                 kb_codex.start_session(Path("latest.jsonl"), Path("/work"), "example", "", remote=remote)
             server.run_turn.assert_not_called()
             constructor.assert_called_once()
+
+    def test_no_prompt_binds_and_persists_guidance_before_closing_without_inference(self):
+        calls = mock.Mock()
+        remote = mock.Mock()
+        with mock.patch.object(kb_codex, "CodexAppServer") as constructor:
+            server = constructor.return_value.__enter__.return_value
+            server.start.return_value = "new-id"
+            calls.attach_mock(server, "server")
+            calls.attach_mock(remote, "remote")
+            result = kb_codex.start_session(Path("snapshot.json"), Path("/work"), "example",
+                                           "SOURCE DIFF", full_access=False, remote=remote)
+        self.assertEqual(result, "new-id")
+        self.assertEqual(calls.method_calls, [
+            mock.call.server.start(Path("/work"), False),
+            mock.call.remote.bind("new-id", include_guidance=False),
+            mock.call.server.request("thread/inject_items", {"threadId": "new-id", "items": [
+                guidance_item(), {"type": "message", "role": "developer", "content": [
+                    {"type": "input_text", "text": "SOURCE DIFF"}]}]}),
+            mock.call.server.request("thread/name/set", {
+                "threadId": "new-id", "name": "example Remote KBを活用する"}),
+        ])
+        constructor.assert_called_once()
+        constructor.return_value.__exit__.assert_called_once()
 
     def test_start_and_resume_do_not_override_model_provider_or_environment(self):
         server = kb_codex.CodexAppServer.__new__(kb_codex.CodexAppServer)

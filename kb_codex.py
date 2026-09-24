@@ -5,7 +5,7 @@ Copyright (c) 2026 GMO Pepabo, Inc. See LICENSE.kb-cli.
 import json
 import os
 import subprocess
-from kb_items import load_items
+from kb_items import guidance_item, load_session_items
 
 
 def config_flags(overrides=()):
@@ -104,24 +104,28 @@ class CodexAppServer:
 
 
 def start_session(jsonl, workspace, name, update_context, *, full_access=True, prompt=None, remote=None,
-                  run_initial_turn=True, overrides=()):
+                  run_initial_turn=None, overrides=(), developer_text=None):
+    # Seeding a resumable session does not itself constitute a user request.
+    run_initial_turn = prompt is not None and run_initial_turn is not False
+    context_items = []
+    if update_context and not run_initial_turn:
+        context_items.append({"type": "message", "role": "developer", "content": [
+            {"type": "input_text", "text": update_context}]})
     # Validate before starting Codex. Never import a producer's session metadata.
-    items = load_items(jsonl) if remote is None else None
+    items = [*load_session_items(jsonl, developer_text=developer_text), *context_items] if remote is None else None
     if remote is not None:
         # thread/start may open a prewarm socket before returning its ID.
         # Register, persist the new empty thread, then close this app-server so
         # the first user turn opens a socket with the binding already in place.
         with (CodexAppServer(overrides) if overrides else CodexAppServer()) as bootstrap:
             session_id = bootstrap.start(workspace, full_access)
-            remote.bind(session_id)
+            remote.bind(session_id, include_guidance=False)
             # Naming an empty thread only updates its index; it does not create
-            # a rollout. Persist a small marker through the native history API
-            # before closing the prewarmed connection. Keep KB items remote.
+            # a rollout. Persist the developer guidance through the native
+            # history API; the binding omits it to avoid injecting it twice.
             bootstrap.request("thread/inject_items", {
                 "threadId": session_id,
-                "items": [{"type": "message", "role": "developer", "content": [
-                    {"type": "input_text", "text": "Remote KB is provided by the account pool for this session."}
-                ]}],
+                "items": [guidance_item(), *context_items],
             })
             bootstrap.request("thread/name/set", {"threadId": session_id, "name": f"{name} Remote KBを活用する"})
         if not run_initial_turn:
@@ -134,8 +138,7 @@ def start_session(jsonl, workspace, name, update_context, *, full_access=True, p
             server.resume(session_id, workspace, full_access)
         # The new session uses the installed Codex and the caller's local config.
         if run_initial_turn:
-            instruction = prompt or "今まで読んだ内容をふんだんに活用してください。"
-            first_turn = "\n\n".join(part for part in (update_context, instruction) if part)
+            first_turn = "\n\n".join(part for part in (update_context, prompt) if part)
             server.run_turn(session_id, first_turn, workspace)
         server.request("thread/name/set", {"threadId": session_id, "name": f"{name} KBを活用する"})
     return session_id

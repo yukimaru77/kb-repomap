@@ -7,6 +7,41 @@ from kb_api import COMPACTION_TYPES
 from kb_fork_mint import CHARTER
 
 
+CONTEXT_GUIDANCE = (
+    "The supplied compacted context is prior knowledge provided by the user. "
+    "Use it as a foundation for subsequent understanding and work. "
+    "When precise details are needed, use that knowledge to narrow down relevant "
+    "sources and search them efficiently."
+)
+
+
+def guidance_item():
+    return {"type": "message", "role": "developer", "content": [
+        {"type": "input_text", "text": CONTEXT_GUIDANCE}]}
+
+
+def load_session_items(path, *, developer_text=None):
+    """Attach current guidance without changing the portable snapshot on disk."""
+    items = []
+    for item in load_items(path):
+        content = item.get("content")
+        text = content if isinstance(content, str) else "".join(
+            part.get("text", "") for part in content or [] if isinstance(part, dict))
+        # The exact legacy charter is superseded by the developer guidance.
+        # Preserve other user instructions and all opaque compaction fields.
+        if item.get("role") == "user" and text == CHARTER:
+            continue
+        items.append(item)
+    instructions = [guidance_item()]
+    if developer_text is not None:
+        if not isinstance(developer_text, str):
+            raise ValueError("dev.txt must contain UTF-8 text")
+        if developer_text.strip():
+            instructions.append({"type": "message", "role": "developer", "content": [
+                {"type": "input_text", "text": developer_text}]})
+    return [*instructions, *items]
+
+
 def validate_items(items):
     if not isinstance(items, list) or not items:
         raise ValueError("KB items must be a nonempty array")

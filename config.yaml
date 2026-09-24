@@ -10,8 +10,8 @@ two_stage:
   token_budget: 150000
 
 # Used by both v2 compaction (repository map generation has no LLM).
-model: gpt-6-astra
-effort: low
+model: gpt-6-sol
+effort: medium
 
 # Operational tuning.
 workers: 12

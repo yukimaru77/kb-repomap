@@ -16,7 +16,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import kb_cli
 import kb_codex
 import kb_store
-from kb_items import load_items, dump_items
+from kb_items import load_items, dump_items, guidance_item
 from kb_fork_mint import CHARTER
 
 
@@ -583,7 +583,7 @@ class CodexHandoffTest(unittest.TestCase):
         self.assertEqual(sid, "new-id")
         self.assertEqual(server.method_calls, [
             mock.call.start(Path("/work"), False),
-            mock.call.request("thread/inject_items", {"threadId": "new-id", "items": items}),
+            mock.call.request("thread/inject_items", {"threadId": "new-id", "items": [guidance_item(), *items]}),
             mock.call.run_turn("new-id", "EXACT DIFF\n\nUse the patch", Path("/work")),
             mock.call.request("thread/name/set", {"threadId": "new-id", "name": "example KBを活用する"}),
         ])

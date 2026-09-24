@@ -8,8 +8,8 @@ from concurrent.futures import ThreadPoolExecutor
 from http.client import IncompleteRead
 
 COMPACTION_TYPES = {"compaction", "compaction_summary", "context_compaction"}
-DEFAULT_MODEL = "gpt-6-astra"
-DEFAULT_EFFORT = "low"
+DEFAULT_MODEL = "gpt-6-sol"
+DEFAULT_EFFORT = "medium"
 DEFAULT_COMPACT_WORKERS = 12
 COMPACT_MAX_ATTEMPTS = 6
 COMPACT_RETRY_MAX_DELAY = 30

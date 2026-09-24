@@ -6,11 +6,11 @@ from pathlib import Path
 import urllib.request
 
 from kb_api import NoRedirect, pool_configuration
-from kb_items import load_items
+from kb_items import load_session_items
 
 
 class RemoteKB:
-    def __init__(self, config, jsonl):
+    def __init__(self, config, jsonl, *, developer_text=None):
         parser = argparse.ArgumentParser(add_help=False, allow_abbrev=False)
         parser.add_argument("--pool-config")
         parser.add_argument("--origin")
@@ -28,14 +28,18 @@ class RemoteKB:
             environ.setdefault("KB_POOL_PRIVATE_HTTP", "1")
         base, self.key = pool_configuration(environ)
         self.origin = base.removesuffix("/_pool/rr")
-        # Session metadata belongs to Codex. Only model-visible response items
-        # (all independent blobs, followed by the existing KB charter) go remote.
-        self.items = load_items(jsonl)
+        # Session metadata belongs to Codex. Bind developer guidance and the
+        # portable memories; never import the producer's session configuration.
+        self.items = load_session_items(jsonl, developer_text=developer_text)
 
-    def bind(self, session_id):
+    def bind(self, session_id, *, include_guidance=True):
+        # The legacy app-server launcher persists the first item locally to
+        # create a resumable rollout. Native launches keep it in the binding.
+        # Store dev.txt remains in both bindings, so it is never lost or doubled.
+        items = self.items if include_guidance else self.items[1:]
         request = urllib.request.Request(
             self.origin + "/_pool/kb/bind",
-            data=json.dumps({"session_id": session_id, "items": self.items}, ensure_ascii=False).encode(),
+            data=json.dumps({"session_id": session_id, "items": items}, ensure_ascii=False).encode(),
             headers={"Authorization": f"Bearer {self.key}", "Content-Type": "application/json"},
             method="POST",
         )

@@ -74,9 +74,9 @@ def remote_command(native_args, remote, binding_id):
     return with_config(native_args, flags), env
 
 
-def run(args, config, snapshot, workspace, context):
+def run(args, config, snapshot, workspace, context, *, developer_text=None):
     if args.remote:
-        remote = RemoteKB(config, snapshot)
+        remote = RemoteKB(config, snapshot, developer_text=developer_text)
         if context:
             remote.items.append({"type": "message", "role": "user", "content": [
                 {"type": "input_text", "text": context}]})
@@ -93,13 +93,8 @@ def run(args, config, snapshot, workspace, context):
     local_command(args.native_args, "validation-only")
     session_id = kb_codex.start_session(snapshot, workspace, args.name, context,
                                          full_access=False, run_initial_turn=False,
-                                         overrides=seed_overrides(args.native_args))
-    if context:
-        with kb_codex.CodexAppServer() as server:
-            server.resume(session_id, workspace, False)
-            server.request("thread/inject_items", {"threadId": session_id, "items": [
-                {"type": "message", "role": "user", "content": [
-                    {"type": "input_text", "text": context}]}]})
+                                         overrides=seed_overrides(args.native_args),
+                                         developer_text=developer_text)
     command = local_command(args.native_args, session_id)
     command = with_config(command[1:], kb_codex.config_flags())
     os.chdir(workspace)

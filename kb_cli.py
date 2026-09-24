@@ -104,12 +104,28 @@ def create_kb(name, loaded, commit, config, filename="latest.json"):
 def publish_paper(args, config):
     run = args.run.expanduser().resolve()
     manifest = json.loads((run / "manifest.json").read_text())
+    developer_file = run / "dev.txt"
+    developer_text = developer_file.read_text(encoding="utf-8") if developer_file.exists() else None
+    from kb_paper import OFFICIAL_POLICY, official_paper_info
+    if manifest.get('policy') == OFFICIAL_POLICY:
+        info = official_paper_info(run,
+            source_repository_url=getattr(args, 'source_repository_url', None),
+            main_source_repository_url=getattr(args, 'main_source_repository_url', None))
+        selected = store.configured_stores(config, args.store)[0]
+        revision = store.publish(selected, args.name, info, run / 'kb.json', filename=args.file,
+                                 developer_text=developer_text)
+        print(f"論文KBを保存しました: {args.name}/{args.file} / store: {selected['name']} / {revision}")
+        return
+    if getattr(args, 'source_repository_url', None) or getattr(args, 'main_source_repository_url', None):
+        raise ValueError("出典URLの変更オプションは公式資料付き最終KBで使用してください")
     result = json.loads((run / "result.json").read_text())
     snapshot = run / "kb.json"
     items = load_items(snapshot)
     references, main = result["references"], result["main_blobs"]
+    reference_blobs = result.get("reference_blobs", references)
     if (not isinstance(references, int) or not isinstance(main, int)
-            or references < 1 or main < 1 or len(items) != references + main
+            or not isinstance(reference_blobs, int)
+            or references < 1 or reference_blobs < 1 or main < 1 or len(items) != reference_blobs + main
             or result.get("items") != len(items)
             or any(item.get("type") not in COMPACTION_TYPES for item in items)):
         raise ValueError("paper-kbの完了結果とblob数が一致しません")
@@ -124,11 +140,12 @@ def publish_paper(args, config):
             "repository_url": source_address(source_git["repository_url"]),
             "source_commit": commit, "branch": source_git.get("branch"),
             "subdir": source_git.get("subdir", "."),
-            "references": references, "main_blobs": main,
+            "references": references, "reference_blobs": reference_blobs, "main_blobs": main,
             "build": {key: manifest[key] for key in ("model", "effort", "budget", "chunk_tokens") if key in manifest}}
     store.verify_source_commit(info)
     selected = store.configured_stores(config, args.store)[0]
-    revision = store.publish(selected, args.name, info, snapshot, filename=args.file)
+    revision = store.publish(selected, args.name, info, snapshot, filename=args.file,
+                             developer_text=developer_text)
     print(f"論文KBを保存しました: {args.name}/{args.file} / store: {selected['name']} / {revision}")
 
 
@@ -146,7 +163,11 @@ def _launch(args, config):
     print(f"KB: {args.name}/{args.file} / store: {loaded['store']['name']}", flush=True)
     paper = info.get("source_kind") == "paper"
     if paper:
-        print(f"source: paper / SHA256 {info['source_sha256']} / 引用 {info['references']} / 本論文blob {info['main_blobs']}", flush=True)
+        if info.get('paper_layout') == 'main-plus-official-resources':
+            print(f"source: paper / SHA256 {info['source_sha256']} / 本論文blob {info['main_blobs']}個 / 公式資料 {info['official_resources']}件 / 公式blob {info['official_blobs']}個", flush=True)
+        else:
+            reference_blobs = info.get("reference_blobs", info["references"])
+            print(f"source: paper / SHA256 {info['source_sha256']} / 引用資料 {info['references']}件 / 引用blob {reference_blobs}個 / 本論文blob {info['main_blobs']}個", flush=True)
         if args.rebuild == "always":
             raise ValueError("論文KBの再作成はpaper-kbを実行し、--publishで保存してください")
         head, context = None, ""
@@ -170,13 +191,17 @@ def _launch(args, config):
     elif not paper:
         print("KBは基準ブランチと同じcommitです。", flush=True)
     workspace = Path(args.workspace).expanduser().resolve()
+    developer = {}
+    if loaded.get("developer_text") and loaded["developer_text"].strip():
+        developer["developer_text"] = loaded["developer_text"]
+        print(f"Developer instructions: {args.name}/dev.txt", flush=True)
     if hasattr(args, "native_args"):
         from kb_native import run
-        return run(args, config, jsonl, workspace, context)
-    options = {}
+        return run(args, config, jsonl, workspace, context, **developer)
+    options = dict(developer)
     if getattr(args, "remote", False):
         from kb_remote import RemoteKB
-        options["remote"] = RemoteKB(config, jsonl)
+        options["remote"] = RemoteKB(config, jsonl, **developer)
     session_id = kb_codex.start_session(jsonl, workspace, args.name, context,
                                         full_access=not args.no_yolo, prompt=args.prompt, **options)
     print(f"session: {session_id}", flush=True)
@@ -237,6 +262,8 @@ def main(argv=None):
     paper_publish.add_argument("name", type=store.name_value)
     paper_publish.add_argument("--run", type=Path, required=True)
     paper_publish.add_argument("--store")
+    paper_publish.add_argument("--source-repository-url", help="公式資料入力の元commitを含む公開用Git URL（公式資料付き最終KB）")
+    paper_publish.add_argument("--main-source-repository-url", help="本論文入力の元commitを含む公開用Git URL（公式資料付き最終KB）")
     codex = commands.add_parser("codex", help="KBを取得して新規Codexセッションを起動")
     codex.add_argument("name", type=store.name_value)
     codex.add_argument("--store")
