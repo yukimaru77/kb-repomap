@@ -21,9 +21,10 @@ Gitリポジトリを **Aiderの構造マップ → v2圧縮blob → 持ち運�
 git clone https://github.com/yukimaru77/kb-repomap.git
 cd kb-repomap
 uv sync --locked
+npm ci --ignore-scripts
 ```
 
-Python 3.12と依存関係をプロジェクト専用環境へ用意します。Aider本体・LiteLLM・Codex CLIは
+Python 3.12とNode.js/npmの依存関係をプロジェクト専用環境へ用意します。Aider本体・LiteLLM・Codex CLIは
 map/blob生成には不要です。初回のパッケージ・tiktoken辞書取得にはネットワークを使いますが、
 map生成自体にLLM呼び出しやAPIキーは不要です。
 
@@ -459,9 +460,13 @@ Codex側の設定・ログイン・環境変数を変更する処理はありま
 ### 作成の流れ
 
 1. 管理用ディレクトリへcloneし、Aiderエンジンで `repository-map.txt` を生成。
-2. 関連ディレクトリのソースを約150K入力トークンずつにまとめる。
+2. Git追跡ファイルのうちRepomixの既定フィルタを通ったテキストを候補にし、
+   従来のバイナリ・生成物・大きなデータファイル等の除外ルールも適用する。
+   `.gitignore`、`.ignore`、`.repomixignore` もRepomix側で反映する。
+   Luna等による追加のAI選別は行わない。除外したファイルと理由は作成状態の
+   `skipped` に記録する。導入時は `install.sh` がNode依存のRepomixもインストールする。
+   残ったソースを関連ディレクトリごと約150K入力トークンずつにまとめる。
    各パックに共通mapと読解指示を付け、userメッセージ1件として直接圧縮へ送る。
-   従来のバイナリ・生成物・大きなデータファイル等の除外ルールを引き継ぐ。
 3. `input` の末尾に `{"type":"compaction_trigger"}` を追加し、`stream=true, store=false` で送信。
    SSEの `response.output_item.done` から暗号化blobを取得し、`response.completed` と使用量を確認。
 4. 二段階圧縮を選んだ場合だけ、指定した個数または一次のAPI報告出力トークン数の合計で

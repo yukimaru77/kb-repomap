@@ -7,7 +7,7 @@ import json
 from pathlib import Path
 
 import kb_api
-from kb_repo import file_block, git, skip_reason, tracked_files
+from kb_repo import file_block, git, repomix_candidates, skip_reason, tracked_files
 
 
 def source_stats(repo, max_file_bytes):
@@ -20,9 +20,13 @@ def source_stats(repo, max_file_bytes):
     included = 0
     source_tokens = 0
     skipped = Counter()
+    candidates = repomix_candidates(repo)
     for rel in tracked_files(repo):
         path = repo / rel.as_posix()
         if not path.is_file():
+            continue
+        if rel not in candidates:
+            skipped["repomix filter"] += 1
             continue
         data = path.read_bytes()
         reason = skip_reason(rel, data, max_file_bytes)

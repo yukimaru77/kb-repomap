@@ -17,8 +17,10 @@ class SourceStatsTest(unittest.TestCase):
             subprocess.run(["git", "init", "-q", str(repository)], check=True)
             (repository / "app.py").write_text("print('hello')\n")
             (repository / "image.png").write_bytes(b"not-real-image")
+            (repository / "noise.txt").write_text("generated copy\n")
+            (repository / ".repomixignore").write_text("noise.txt\n")
             subprocess.run(
-                ["git", "-C", str(repository), "add", "app.py", "image.png"],
+                ["git", "-C", str(repository), "add", "app.py", "image.png", "noise.txt", ".repomixignore"],
                 check=True,
             )
             subprocess.run([
@@ -32,12 +34,10 @@ class SourceStatsTest(unittest.TestCase):
             ], check=True, capture_output=True, text=True)
             stats = json.loads(result.stdout)
 
-        self.assertEqual(stats["included_files"], 1)
-        self.assertEqual(stats["skipped_files"], 1)
+        self.assertEqual(stats["included_files"], 2)
+        self.assertEqual(stats["skipped_files"], 2)
         self.assertGreater(stats["source_total_tokens"], 0)
-        self.assertEqual(
-            stats["skip_reasons"]["binary/asset/certificate suffix"], 1
-        )
+        self.assertEqual(stats["skip_reasons"]["repomix filter"], 2)
 
 
 if __name__ == "__main__":

@@ -3,6 +3,7 @@ set -euo pipefail
 source_dir="$(cd -- "$(dirname -- "$0")" && pwd -P)"
 install_dir="${KB_INSTALL_DIR:-$HOME/.local/bin}"
 uv sync --locked --project "$source_dir"
+npm ci --prefix "$source_dir" --ignore-scripts
 mkdir -p "$install_dir"
 python3 - "$source_dir" "$install_dir/kb" <<'PY'
 import os

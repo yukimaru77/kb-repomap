@@ -1,10 +1,35 @@
 import unittest
-from pathlib import PurePosixPath
+from pathlib import Path, PurePosixPath
+import subprocess
+import tempfile
 
-from kb_repo import skip_reason
+from kb_repo import repomix_candidates, skip_reason, tracked_files
 
 
 class ContentFilterTest(unittest.TestCase):
+    def test_repomix_mechanical_selection_is_applied_to_tracked_files(self):
+        with tempfile.TemporaryDirectory() as temp:
+            repo = Path(temp)
+            subprocess.run(["git", "init", "-q", str(repo)], check=True)
+            for name, body in {
+                "app.py": "print('useful')\n",
+                "dist/generated.js": "const generated = true;\n",
+                "noise.txt": "unneeded\n",
+                ".repomixignore": "noise.txt\n",
+            }.items():
+                path = repo / name
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(body)
+            subprocess.run(["git", "-C", str(repo), "add", "-f", "."], check=True)
+            (repo / "untracked.py").write_text("print('untracked')\n")
+
+            selected = repomix_candidates(repo) & set(tracked_files(repo))
+
+        self.assertIn(PurePosixPath("app.py"), selected)
+        self.assertNotIn(PurePosixPath("dist/generated.js"), selected)
+        self.assertNotIn(PurePosixPath("noise.txt"), selected)
+        self.assertNotIn(PurePosixPath("untracked.py"), selected)
+
     def reason(self, path, size):
         return skip_reason(PurePosixPath(path), b"x" * size, 600_000)
 

@@ -7,6 +7,7 @@ import json
 import os
 import subprocess
 import sys
+import tempfile
 from concurrent.futures import as_completed, ThreadPoolExecutor
 from pathlib import Path, PurePosixPath
 
@@ -45,6 +46,15 @@ def tracked_files(repo):
     raw = subprocess.check_output(["git", "-C", str(repo), "ls-files", "-z"])
     return [PurePosixPath(p.decode(errors="surrogateescape"))
             for p in raw.split(b"\0") if p]
+
+
+def repomix_candidates(repo):
+    """Return Repomix's mechanically selected text files before KB-specific limits."""
+    script = Path(__file__).with_name("repomix_candidates.mjs")
+    with tempfile.TemporaryDirectory(prefix="kb-repomix-") as work:
+        subprocess.run(["node", str(script), str(repo), work], check=True)
+        selected = json.loads((Path(work) / "selected.json").read_text())
+    return {PurePosixPath(path) for path in selected}
 
 
 def low_value_text_reason(rel, data):
@@ -370,11 +380,15 @@ def main():
             raise SystemExit(f"prelude not found: {path}")
 
     included, skipped, contents = [], [], {}
+    candidates = repomix_candidates(repo)
     for rel in tracked_files(repo):
         path = repo / rel.as_posix()
         if not path.is_file():
             continue
         data = path.read_bytes()
+        if rel not in candidates:
+            skipped.append({"path": rel.as_posix(), "reason": "repomix filter"})
+            continue
         reason = skip_reason(rel, data, args.max_file_bytes)
         if reason:
             skipped.append({"path": rel.as_posix(), "reason": reason})
