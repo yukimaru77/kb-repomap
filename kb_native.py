@@ -20,6 +20,7 @@ def parse(argv):
     parser.add_argument("--file", default="latest.json")
     parser.add_argument("--workspace", default=".")
     parser.add_argument("--rebuild", choices=("never", "always"), default="never")
+    parser.add_argument("--clean", action="store_true", help="再作成時に前回blobを再利用せず全体を作り直す")
     args = parser.parse_args(argv[:boundary])
     from kb_cli import file_argument
     args.file = file_argument(args.file)

@@ -180,6 +180,26 @@ class GitStoreTest(unittest.TestCase):
         self.assertEqual(kb_store.find_kb(self.config, "example", "second")["jsonl"].read_bytes(), self.json.read_bytes())
         self.assertEqual(kb_store.find_kb(self.config, "example", "second", filename="v1.00.json")["info"], loaded["info"])
 
+    def test_create_reuses_published_snapshot_and_clean_disables_it(self):
+        kb_store.write_config(self.config)
+        kb_store.publish(self.store2, "example", self.info, self.json)
+        with mock.patch.object(kb_cli, "rebuild", return_value=self.json) as rebuild, \
+             contextlib.redirect_stdout(io.StringIO()):
+            kb_cli.main(["create", "example", "--store", "second"])
+        previous = rebuild.call_args.args[4]
+        self.assertIsNotNone(previous)
+        self.assertEqual(previous["info"], self.info)
+        self.assertEqual(previous["jsonl"].read_bytes(), self.json.read_bytes())
+        # 別名ファイルの初回作成は latest.json を再利用元にする
+        with mock.patch.object(kb_cli, "rebuild", return_value=self.json) as rebuild, \
+             contextlib.redirect_stdout(io.StringIO()):
+            kb_cli.main(["create", "example", "--store", "second", "--file", "v2"])
+        self.assertEqual(rebuild.call_args.args[4]["jsonl"].name, "latest.json")
+        with mock.patch.object(kb_cli, "rebuild", return_value=self.json) as rebuild, \
+             contextlib.redirect_stdout(io.StringIO()):
+            kb_cli.main(["create", "example", "--store", "second", "--clean"])
+        rebuild.assert_called_once_with("example", mock.ANY, self.head, self.config, None)
+
     def test_publish_named_file_from_cli_creates_registration_and_preserves_input(self):
         kb_store.write_config(self.config)
         original = self.json.read_bytes()
@@ -387,7 +407,8 @@ class GitStoreTest(unittest.TestCase):
              mock.patch.object(kb_codex, "start_session") as start, \
              contextlib.redirect_stdout(io.StringIO()):
             kb_cli.main(["create", "example", "--store", "second"])
-        rebuild.assert_called_once_with("example", selected_info, self.base, self.config, None)
+        rebuild.assert_called_once_with("example", selected_info, self.base, self.config, mock.ANY)
+        self.assertEqual(rebuild.call_args.args[4]["store"]["name"], "second")
         start.assert_not_called()
         self.assertEqual(kb_store.find_kb(self.config, "example", "first")["store_revision"], first_revision)
 
@@ -405,7 +426,7 @@ class GitStoreTest(unittest.TestCase):
 
     def args(self, rebuild="ask", filename="latest.json"):
         return SimpleNamespace(name="example", store=None, rebuild=rebuild, workspace=str(self.root),
-                               no_yolo=False, session_only=True, app=False, prompt=None, file=filename)
+                               no_yolo=False, session_only=True, app=False, prompt=None, file=filename, clean=False)
 
     def test_decline_rebuild_sends_diff_to_new_session_without_publishing(self):
         revision = kb_store.publish(self.store2, "example", self.info, self.json)

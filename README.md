@@ -66,6 +66,19 @@ JSON配列には暗号化compaction項目と短いKB憲章（user指示）だけ
 作成済みKBに実行すると作り直します。登録した保存先を指定する場合は
 `kb create xx --store <保存先名>` を使います。
 
+作り直しは既定で増分です。保存済みKB（同名ファイル、なければ `latest.json`）の
+`pack_manifest` を再利用元にし、基準ブランチの差分で影響を受けたパックだけ号池で圧縮し、
+残りのblobはそのまま流用します。実行時に `blob再利用: N/M / 号池で圧縮: K` を表示します。
+前回blobを使わず全体を作り直す場合は `--clean` を付けます。
+`kb create`、`kb codex --rebuild always`、`kb NAME --rebuild always codex`、
+再作成の質問に `y` と答えた場合のいずれも同じ増分処理です。
+
+```bash
+kb create octane            # 増分（既定）
+kb create octane --clean    # 全体を作り直す
+kb octane --remote --rebuild always --clean codex
+```
+
 作成には下記の `build_args` または `KB_POOL_*` による圧縮API接続先の設定が必要です。
 `kb list` では未作成KBを「未作成」と表示します。作成後は同じ名前で `kb codex xx` を使えます。
 

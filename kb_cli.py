@@ -41,8 +41,13 @@ def rebuild(name, info, commit, config, previous=None):
                "--workspace", str(build_root / "repos"), "--no-mint"]
     if reusable:
         command += ["--reuse-manifest", str(reuse_file)]
+    if previous and not reusable:
+        print("前回KBのパック対応情報が使えないため、全体を作り直します。", flush=True)
     subprocess.run(command, env=env, check=True)
     state = json.loads((build_root / name / "state.json").read_text())
+    total = len([item for item in state.get("blobs", []) if item.get("type") in COMPACTION_TYPES])
+    reused_count = state.get("reused_packs") or 0
+    print(f"blob再利用: {reused_count}/{total} / 号池で圧縮: {total - reused_count}", flush=True)
     items = [item for item in state.get("blobs") or state.get("base_items", [])
              if item.get("type") in COMPACTION_TYPES]
     if state.get("reused_packs"):
@@ -104,9 +109,25 @@ def register(args, config):
     print(f"作成: kb create {name} --store {selected['name']}")
 
 
-def create_kb(name, loaded, commit, config, filename="latest.json"):
+def previous_kb(config, name, selected, filename):
+    """再利用元: 作成済みの同名ファイル、なければ latest.json。どちらもなければ None。"""
+    for candidate in dict.fromkeys([filename, "latest.json"]):
+        try:
+            loaded = store.find_kb(config, name, selected, filename=candidate)
+        except (ValueError, subprocess.CalledProcessError):
+            continue
+        if loaded.get("jsonl"):
+            return loaded
+    return None
+
+
+def create_kb(name, loaded, commit, config, filename="latest.json", *, previous=None, clean=False):
     print(f"KBを作成します: {name}@{commit} / store: {loaded['store']['name']}", flush=True)
-    previous = loaded if loaded.get("jsonl") else None
+    if clean:
+        print("--clean: 前回blobを再利用せず全体を作り直します。", flush=True)
+        previous = None
+    elif previous is None and loaded.get("jsonl"):
+        previous = loaded
     jsonl = rebuild(name, loaded["info"], commit, config, previous)
     info = {**loaded["info"], "source_commit": commit}
     from kb_incremental import manifest_from_state
@@ -204,7 +225,8 @@ def _launch(args, config):
     if context:
         print(f"branch: {info['branch']} / KB: {info['source_commit'][:12]} → HEAD: {head[:12]}", flush=True)
         if should_rebuild(args.rebuild):
-            jsonl = create_kb(args.name, loaded, head, config, args.file)
+            jsonl = create_kb(args.name, loaded, head, config, args.file,
+                              clean=getattr(args, "clean", False))
             context = ""
         else:
             print(f"再作成せず更新差分を追加します: {len(context.encode()):,} bytes", flush=True)
@@ -260,6 +282,7 @@ def main(argv=None):
     creation = commands.add_parser("create", help="登録済みKBを基準ブランチから作成・保存")
     creation.add_argument("name", type=store.name_value)
     creation.add_argument("--store")
+    creation.add_argument("--clean", action="store_true", help="前回blobを再利用せず全体を作り直す")
     stores = commands.add_parser("store", help="保存先Gitリポジトリを管理")
     actions = stores.add_subparsers(dest="action", required=True)
     add = actions.add_parser("add")
@@ -289,6 +312,7 @@ def main(argv=None):
     codex.add_argument("--store")
     codex.add_argument("--workspace", default=".")
     codex.add_argument("--rebuild", choices=("ask", "always", "never"), default="ask")
+    codex.add_argument("--clean", action="store_true", help="再作成時に前回blobを再利用せず全体を作り直す")
     mode = codex.add_mutually_exclusive_group()
     mode.add_argument("--session-only", action="store_true")
     mode.add_argument("--app", action="store_true")
@@ -306,7 +330,9 @@ def main(argv=None):
         loaded = store.find_kb(config, args.name, args.store, download=False)
         if loaded["info"].get("source_kind") == "paper":
             raise ValueError("論文KBはpaper-kbで作成し、--publishで保存してください")
-        create_kb(args.name, loaded, store.source_head(loaded["info"]), config, args.file)
+        previous = None if args.clean else previous_kb(config, args.name, args.store, args.file)
+        create_kb(args.name, loaded, store.source_head(loaded["info"]), config, args.file,
+                  previous=previous, clean=args.clean)
     elif args.command == "store":
         entries = config.setdefault("stores", [])
         if args.action == "add":
