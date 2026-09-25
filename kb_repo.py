@@ -350,6 +350,7 @@ def main():
         help="compress this non-repository context first; repeatable",
     )
     parser.add_argument("--name", required=True)
+    parser.add_argument("--reuse-manifest", help="previous pack-to-blob mapping")
     parser.add_argument("--budget-tokens", type=int, default=150_000)
     parser.add_argument("--max-file-bytes", type=int, default=600_000)
     parser.add_argument("--thin-threshold", type=int, default=2_000)
@@ -379,16 +380,16 @@ def main():
         if not path.is_file():
             raise SystemExit(f"prelude not found: {path}")
 
-    included, skipped, contents = [], [], {}
     candidates = repomix_candidates(repo)
+    included, skipped, contents = [], [], {}
     for rel in tracked_files(repo):
         path = repo / rel.as_posix()
         if not path.is_file():
             continue
-        data = path.read_bytes()
         if rel not in candidates:
             skipped.append({"path": rel.as_posix(), "reason": "repomix filter"})
             continue
+        data = path.read_bytes()
         reason = skip_reason(rel, data, args.max_file_bytes)
         if reason:
             skipped.append({"path": rel.as_posix(), "reason": reason})
@@ -404,7 +405,36 @@ def main():
         raise SystemExit(f"repo_map/instructions consume {prefix_tokens} tokens, exceeding budget")
     block_tokens = {p: kb_api.est_tokens(file_block(p.as_posix(), contents[p])) for p in included}
     units = build_related_units(included, block_tokens, capacity)
-    packs = pack_units(units, block_tokens, capacity)
+    reusable = json.loads(Path(args.reuse_manifest).read_text()) if args.reuse_manifest else None
+    old_packs = []
+    changed = set()
+    if reusable and reusable.get("reading_sha256") == digest(reading_instructions.encode()) \
+            and reusable.get("instructions_sha256") == digest(instructions.encode()) and not prelude_files:
+        changed_raw = subprocess.check_output([
+            "git", "-C", str(repo), "diff", "--name-only", "-z",
+            reusable["commit"], "HEAD", "--",
+        ])
+        changed = {path.decode("utf-8", "surrogateescape")
+                   for path in changed_raw.split(b"\0") if path}
+        old_packs = reusable["packs"]
+    included_set = set(included)
+    reserved = set()
+    packs = []
+    reuse_by_files = {}
+    for old in old_packs:
+        old_paths = [PurePosixPath(path) for path in old["files"]]
+        paths = [path for path in old_paths if path in included_set and path not in reserved]
+        reserved.update(paths)
+        if not paths:
+            continue
+        if sum(block_tokens[path] for path in paths) > capacity:
+            packs.extend(pack_units(build_related_units(paths, block_tokens, capacity), block_tokens, capacity))
+            continue
+        packs.append(paths)
+        if paths == old_paths and not any(path.as_posix() in changed for path in paths):
+            reuse_by_files[tuple(paths)] = old["blobs"]
+    new_paths = [path for path in included if path not in reserved]
+    packs.extend(pack_units(build_related_units(new_paths, block_tokens, capacity), block_tokens, capacity))
 
     state = load_repo_state(args.name, repo)
     state["commit"] = git(repo, "rev-parse", "HEAD")
@@ -423,6 +453,7 @@ def main():
     pending = []
     planned_pack_ids = []
     plan = []
+    reused = 0
     prelude_ids = []
     for index, path in enumerate(prelude_files, 1):
         label_name = f"{index:02d}-{path.name}"
@@ -456,9 +487,31 @@ def main():
         label = f"pack-{index:02d}:{common_directory(paths)}"
         estimated = kb_api.est_tokens(source)
         plan.append({"label": label, "files": len(paths), "estimated_tokens": estimated,
-                     "first": paths[0].as_posix(), "last": paths[-1].as_posix()})
+                     "first": paths[0].as_posix(), "last": paths[-1].as_posix(),
+                     "reused": tuple(paths) in reuse_by_files})
         if pack_id not in fed:
-            pending.append((pack_id, label, paths, source, estimated, False))
+            if tuple(paths) in reuse_by_files and not args.dry_run:
+                blobs = reuse_by_files[tuple(paths)]
+                state["blobs"].extend(blobs)
+                for blob in blobs:
+                    state.setdefault("blob_pack_ids", {})[blob["id"]] = pack_id
+                state["fed"].append(pack_id)
+                state["rounds"].append({"n": len(state["rounds"]) + 1,
+                                        "source": label, "source_id": pack_id,
+                                        "plan_order": index - 1,
+                                        "files": [path.as_posix() for path in paths],
+                                        "estimated_input_tokens": estimated,
+                                        "reused": True})
+                fed.add(pack_id)
+                reused += 1
+            else:
+                pending.append((pack_id, label, paths, source, estimated, False))
+
+    if reused:
+        order = {pack_id: index for index, pack_id in enumerate(planned_pack_ids)}
+        state["blobs"].sort(key=lambda blob: order[state["blob_pack_ids"][blob["id"]]])
+        state["reused_packs"] = state.get("reused_packs", 0) + reused
+        save_repo_state(args.name, state)
 
     print(json.dumps({
         "repo": str(repo), "commit": state["commit"], "repo_map": str(repo_map_path),
@@ -466,7 +519,7 @@ def main():
         "model": args.model, "effort": args.effort,
         "included": len(included), "skipped": len(skipped), "units": len(units),
         "preludes": len(prelude_files), "packs": len(packs),
-        "pending": len(pending), "plan": plan,
+        "pending": len(pending), "reused": reused, "plan": plan,
     }, ensure_ascii=False, indent=2))
     if args.dry_run:
         return

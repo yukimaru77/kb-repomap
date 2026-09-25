@@ -201,6 +201,7 @@ def main():
     parser.add_argument("--ref", help="branch, tag, or commit to check out")
     parser.add_argument("--workspace", default=str(Path(kb_api.STATE_ROOT) / "repos"))
     parser.add_argument("--repo-map", dest="repo_map", help="use an existing repository map")
+    parser.add_argument("--reuse-manifest", help="reuse unchanged packs from a previous KB build")
     parser.add_argument("--reading-instructions-file", help="UTF-8 file replacing each pack's reading instructions")
     parser.add_argument("--instructions-file", help="UTF-8 file replacing first/second-stage compaction API instructions")
     parser.add_argument("--map-tokens", type=int, help="repository map token budget (default: 10000)")
@@ -313,6 +314,8 @@ def main():
     ]
     for prelude in args.prelude_file:
         command += ["--prelude-file", str(Path(prelude).expanduser().resolve())]
+    if args.reuse_manifest:
+        command += ["--reuse-manifest", str(Path(args.reuse_manifest).expanduser().resolve())]
     for option, value in (("--reading-instructions-file", args.reading_instructions_file),
                           ("--instructions-file", args.instructions_file)):
         if value is not None:

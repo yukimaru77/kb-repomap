@@ -164,7 +164,7 @@ class GitStoreTest(unittest.TestCase):
         with mock.patch.object(kb_cli, "rebuild", return_value=self.json) as rebuild, \
              contextlib.redirect_stdout(io.StringIO()):
             kb_cli.main(["create", "example", "--file", "v1.00.json", "--store", "second"])
-        rebuild.assert_called_once_with("example", registration, self.head, self.config)
+        rebuild.assert_called_once_with("example", registration, self.head, self.config, None)
         loaded = kb_store.find_kb(self.config, "example", "second", filename="v1.00.json")
         self.assertEqual(loaded["info"]["source_commit"], self.head)
         self.assertEqual(loaded["jsonl"].read_bytes(), self.json.read_bytes())
@@ -223,7 +223,7 @@ class GitStoreTest(unittest.TestCase):
              mock.patch.object(kb_codex, "start_session", return_value="new-id") as start, \
              contextlib.redirect_stdout(io.StringIO()):
             kb_cli.launch(self.args("always", "v1.00.json"), self.config)
-        rebuild.assert_called_once_with("example", self.info, self.head, self.config)
+        rebuild.assert_called_once_with("example", self.info, self.head, self.config, mock.ANY)
         self.assertEqual(start.call_args.args[3], "")
         named = kb_store.find_kb(self.config, "example", filename="v1.00.json")
         self.assertEqual(named["info"]["source_commit"], self.head)
@@ -387,7 +387,7 @@ class GitStoreTest(unittest.TestCase):
              mock.patch.object(kb_codex, "start_session") as start, \
              contextlib.redirect_stdout(io.StringIO()):
             kb_cli.main(["create", "example", "--store", "second"])
-        rebuild.assert_called_once_with("example", selected_info, self.base, self.config)
+        rebuild.assert_called_once_with("example", selected_info, self.base, self.config, None)
         start.assert_not_called()
         self.assertEqual(kb_store.find_kb(self.config, "example", "first")["store_revision"], first_revision)
 
@@ -427,7 +427,7 @@ class GitStoreTest(unittest.TestCase):
              mock.patch.object(kb_codex, "start_session", return_value="new-id") as start, \
              contextlib.redirect_stdout(io.StringIO()):
             kb_cli.launch(self.args(), self.config)
-        rebuild.assert_called_once_with("example", self.info, self.head, self.config)
+        rebuild.assert_called_once_with("example", self.info, self.head, self.config, mock.ANY)
         loaded = kb_store.find_kb(self.config, "example")
         self.assertEqual(loaded["store"]["name"], "second")
         self.assertEqual(loaded["info"]["source_commit"], self.head)
@@ -524,6 +524,7 @@ class GitStoreTest(unittest.TestCase):
         self.assertIn("new value", requests[0][1]["input"][0]["content"][0]["text"])
         latest = kb_store.find_kb(config, "example")
         self.assertEqual(latest["info"]["source_commit"], self.head)
+        self.assertEqual(latest["info"]["pack_manifest"]["packs"][0]["blob_ids"], [output_blob["id"]])
         self.assertEqual(load_items(latest["jsonl"]), [output_blob, {
             "type": "message", "role": "user", "content": [{"type": "input_text", "text": CHARTER}]}])
         self.assertFalse((self.root / ".codex/sessions").exists())

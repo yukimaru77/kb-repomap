@@ -26,17 +26,29 @@ def file_argument(value):
     return store.jsonl_filename(value if value.endswith((".json", ".jsonl")) else value + ".json")
 
 
-def rebuild(name, info, commit, config):
+def rebuild(name, info, commit, config, previous=None):
     build_root = BUILD_ROOT / name / uuid.uuid4().hex
     build_root.mkdir(parents=True)
     env = dict(os.environ, KB_REPOMAP_HOME=str(build_root))
+    from kb_incremental import reuse_input
+    reusable = reuse_input(previous, name, build_root)
+    reuse_file = build_root / "reuse.json"
+    if reusable:
+        reuse_file.write_text(json.dumps(reusable, ensure_ascii=False))
+        reuse_file.chmod(0o600)
     command = [sys.executable, str(ROOT / "kb_repo_url.py"), info["repository_url"],
                *config.get("build_args", []), "--name", name, "--ref", commit,
                "--workspace", str(build_root / "repos"), "--no-mint"]
+    if reusable:
+        command += ["--reuse-manifest", str(reuse_file)]
     subprocess.run(command, env=env, check=True)
     state = json.loads((build_root / name / "state.json").read_text())
     items = [item for item in state.get("blobs") or state.get("base_items", [])
              if item.get("type") in COMPACTION_TYPES]
+    if state.get("reused_packs"):
+        current_map = Path(state["repo_map"]).read_text(encoding="utf-8")
+        items.append({"type": "message", "role": "user", "content": [{"type": "input_text",
+            "text": "Current repository map. It supersedes maps inside older reused blobs.\n\n" + current_map}]})
     items.append({"type": "message", "role": "user",
                   "content": [{"type": "input_text", "text": CHARTER}]})
     snapshot = build_root / name / "kb.json"
@@ -94,8 +106,16 @@ def register(args, config):
 
 def create_kb(name, loaded, commit, config, filename="latest.json"):
     print(f"KBを作成します: {name}@{commit} / store: {loaded['store']['name']}", flush=True)
-    jsonl = rebuild(name, loaded["info"], commit, config)
+    previous = loaded if loaded.get("jsonl") else None
+    jsonl = rebuild(name, loaded["info"], commit, config, previous)
     info = {**loaded["info"], "source_commit": commit}
+    from kb_incremental import manifest_from_state
+    state_file = jsonl.parent / "state.json"
+    manifest = manifest_from_state(json.loads(state_file.read_text())) if state_file.exists() else None
+    if manifest:
+        info["pack_manifest"] = manifest
+    else:
+        info.pop("pack_manifest", None)
     revision = store.publish(loaded["store"], name, info, jsonl, filename=filename)
     print(f"KBを作成・保存しました: {name}/{filename} / {revision}", flush=True)
     return jsonl
