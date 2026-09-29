@@ -1,0 +1,78 @@
+# ステルス Remote KB（`kb NAME --remote codex|claude` の透過注入）設計
+
+日付: 2026-09-30
+
+## 目的
+
+`--remote` の KB 注入を、クライアント（Codex CLI / Claude Code）の設定・provider・base URL を一切変えずに行う。
+現行（2026-09-29 実装）の loopback プロキシ方式は、Codex を custom provider、Claude を別 `ANTHROPIC_BASE_URL` で起動するため、クライアントが「公式ホストではない」と判断して挙動を変える。
+
+- Claude Code: Anthropic 以外の base URL では MCP tool search を止め、全ツール定義を毎要求に前置きする（`ENABLE_TOOL_SEARCH=true` で回避したが、他にも first-party 判定に依存する機能がありうる）。
+- Codex: custom provider では ChatGPT ログイン前提の機能（検索、プラグイン、accounts/check に依存する経路など）が使えない。WebSocket も無効にしている。
+
+以前の号池ブリッジ（mitmdump による chatgpt.com の透過横取り）と同じ考え方を、kb がセッション単位で行う。
+
+## 観測済みの事実（2026-09-30 スパイク）
+
+- Codex CLI 0.156 は `HTTPS_PROXY=http://127.0.0.1:<port>` を尊重し、mitmdump（regular proxy mode）経由で `chatgpt.com` に到達する。CA は macOS keychain に登録済みの mitmproxy CA（`codex-account-pool/state/ca`）で信頼される。
+- Codex の推論は `GET /backend-api/codex/responses` の WebSocket upgrade で行われる（HTTP POST ではない）。モデル一覧・プラグイン等は HTTP。
+- Claude Code は `HTTPS_PROXY` + `NODE_EXTRA_CA_CERTS=<CA pem>` で `api.anthropic.com` のまま通る（keychain 不要）。
+- mitmproxy 12.2.3 が `codex-account-pool/bridge/.venv/bin/mitmdump` にある。mitmproxy は `request` / `websocket_message` フックで HTTP ボディと WS フレームを書き換えられる。
+
+## 構成
+
+```
+kb NAME --remote codex|claude [args]
+  └─ kb: KB 平文/items を用意、binding を保存（既存）
+  └─ kb: mitmdump をランダムポートで起動（-s kb_stealth_addon.py、--allow-hosts chatgpt.com|api.anthropic.com、confdir=CA dir）
+  └─ kb: 子プロセス起動。env に HTTPS_PROXY=http://127.0.0.1:<port>（Claude は NODE_EXTRA_CA_CERTS も）
+        設定ファイル・provider・base URL・CODEX_HOME 選択（codex ラッパー）は無変更
+  └─ addon: 対象要求だけ書き換えて上流へ。それ以外は素通し
+  └─ 子プロセス終了 → mitmdump 終了、終了コードは子のもの
+```
+
+## 注入規則（既存 injector を流用）
+
+- Codex HTTP `POST chatgpt.com/backend-api/codex/responses`: `input` の先頭 system/developer 直後に items を挿入。`compaction_trigger` / `request_kind=compaction` は素通し。`previous_response_id` 付きは拒否せず、**WS と同じ会話追跡**で扱う（下記）。
+- Codex WS `GET chatgpt.com/backend-api/codex/responses`（upgrade）: client→server のテキストフレームで `type == "response.create"` のものに、HTTP と同じ規則で `input` へ挿入する。`previous_response_id` を使う継続要求では、号池の `kbConversation.transform`（`codex-account-pool/internal/pool/remote_kb_websocket.go`）と同じく、接続内で最初の完全な input に注入し、以降の差分要求は素通しする。server→client フレームは触らない。
+- Claude `POST api.anthropic.com/v1/messages`: `system` を配列に正規化し、末尾ブロックの直前に KB ブロックを挿入（現行どおり）。
+- 上記以外のパス・ホストは byte-for-byte 素通し。`--allow-hosts` で対象 2 ホスト以外は TLS 終端もしない。
+- 圧縮ボディ（gzip/zstd）は mitmproxy が透過的に扱う（`flow.request.text` / `set_text`）。
+
+## binding / resume（既存）
+
+- thread/session id の観測は addon 内で行い、kb 本体へは stderr ではなく `~/.cache/kb/bindings/proxy.log` と binding ファイルで伝える（addon は kb 本体とは別プロセスなので、共有はファイル経由）。Codex の id は `client_metadata`/ヘッダ（既存規則）、Claude は `X-Claude-Code-Session-Id`/`metadata.user_id`。
+- `kb --remote codex resume [ID]`、`kb --remote claude --resume ID|--continue` は現行どおり。ステルス方式でも同じ binding を使う。
+
+## モード選択
+
+- 既定: `mitmdump` が見つかれば **stealth**。探索順は `KB_MITMDUMP` 環境変数 → PATH の `mitmdump` → `~/projects/codex-account-pool/bridge/.venv/bin/mitmdump`。
+- 見つからない場合は現行の **provider** 方式にフォールバックし、stderr に 1 行（`Remote KB: provider mode (mitmdump not found; install: uv tool install mitmproxy)`）。
+- `KB_REMOTE_MODE=provider|stealth` で強制できる。
+- `pool-rr` 併用時は provider 方式のまま（RR 入口は号池の URL を指す必要がある）。
+
+## CA
+
+- CA ディレクトリは `KB_CA_DIR`（既定 `~/.cache/kb/ca`）。無ければ mitmdump 初回起動で生成される。
+- `kb ca-setup`（新サブコマンド）: CA の場所と、信頼登録の手順を表示する。macOS は
+  `security add-trusted-cert -d -r trustRoot -k ~/Library/Keychains/login.keychain-db <ca dir>/mitmproxy-ca-cert.pem`、Linux は `update-ca-certificates` / `trust anchor` の案内。Claude は `NODE_EXTRA_CA_CERTS` で足りるが Codex は OS 信頼が必要。
+- Codex が CA を信頼していない場合、起動直後の要求が TLS エラーになる。addon/kb はそれを検知して「`kb ca-setup` を実行」と 1 行出す（`tls_failed_client` フック）。
+
+## エラー処理
+
+- mitmdump 起動失敗（ポート衝突・CA 生成失敗）: provider 方式にフォールバックせず、理由を出して終了（ステルスを明示的に選んだ場合）。既定モードで起動失敗した場合はフォールバックして 1 行通知。
+- 子プロセスが先に終了したら mitmdump を必ず止める（`finally`）。
+- addon 内の例外は上流へ素通し（注入せず）し、proxy.log に 1 行。TUI には出さない。
+
+## テスト
+
+- 純関数: WS `response.create` の注入と `previous_response_id` 追跡（号池の `remote_kb_websocket_test.go` のケースを Python に写す）、HTTP 注入、Claude 注入（既存）。
+- addon: mitmproxy の `tflow`/`taddons` テストユーティリティで、`request` / `websocket_message` フックが対象要求だけを書き換え、他ホスト・他パスを触らないこと。
+- ランチャ: mitmdump のダミー実行ファイルを PATH に置き、子プロセスの env（`HTTPS_PROXY`、Claude の `NODE_EXTRA_CA_CERTS`、`ANTHROPIC_BASE_URL` 不在、provider override 不在）と終了コード伝播、フォールバック分岐を確認。
+- E2E（手動、Herdr の TUI）: `kb octane --remote codex` で `/status` が provider=openai のまま、WS で KB 質問に回答、`resume` で再注入。`kb octane --remote claude` で `/context` の MCP tools が on-demand のまま、KB 質問に回答、`--resume` で再注入。
+
+## 対象外
+
+- 号池側の変更（号池はアカウント中継のみ）。
+- Codex App / ChatGPT App の透過（プロセス単位の env なので対象外、以前の仕様どおり）。
+- Windows。
