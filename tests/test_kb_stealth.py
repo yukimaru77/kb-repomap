@@ -3,6 +3,7 @@ import io
 import json
 import os
 from pathlib import Path
+import signal
 import socket
 import stat
 import sys
@@ -129,6 +130,20 @@ class LauncherTests(FakeMitmdump):
             kb_stealth.launch("codex", ["codex"], {}, self.dir, provider=lambda: 0, describe=str,
                               runner=runner, env=self.env)
         self.assertTrue(self.wait_terminated())
+
+    def test_mitmdump_stopped_when_kb_is_terminated(self):
+        def runner(*_args, **_kwargs):
+            os.kill(os.getpid(), signal.SIGTERM)
+            time.sleep(5)
+
+        previous = signal.getsignal(signal.SIGTERM)
+        with self.assertRaises(SystemExit) as caught:
+            kb_stealth.launch("codex", ["codex"], {}, self.dir, provider=lambda: 0, describe=str,
+                              runner=runner, env=self.env)
+        self.assertEqual(caught.exception.code, 128 + signal.SIGTERM)
+        self.assertTrue(self.wait_terminated())
+        self.assertIs(signal.getsignal(signal.SIGTERM), previous)
+        self.assertIn(f"kb_parent={os.getpid()}", json.loads(self.record.read_text())["argv"])
 
     def test_fallback_when_mitmdump_absent(self):
         env = dict(self.env, PATH="/usr/bin:/bin")

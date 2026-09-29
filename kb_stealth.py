@@ -9,10 +9,12 @@ import json
 import os
 from pathlib import Path
 import shutil
+import signal
 import socket
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 
 import kb_remote_proxy as proxy
@@ -127,7 +129,8 @@ class Session:
         return [mitmdump, "-q", "--listen-host", "127.0.0.1", "-p", str(self.port),
                 "--set", f"confdir={self.ca}", "--allow-hosts", ALLOW_HOSTS,
                 "-s", str(ADDON), "--set", f"kb_payload={self.payload}",
-                "--set", f"kb_bindings={proxy.BINDINGS}", "--set", f"kb_repo={REPO}"]
+                "--set", f"kb_bindings={proxy.BINDINGS}", "--set", f"kb_repo={REPO}",
+                "--set", f"kb_parent={os.getpid()}"]
 
     def _start(self, mitmdump):
         proxy.BINDINGS.mkdir(parents=True, exist_ok=True)
@@ -207,13 +210,39 @@ def launch(client, command, payload, workspace, *, provider, describe, runner=No
             raise ValueError(f"stealth 方式を開始できません: {error}") from error
         notice(f"Remote KB: provider mode (stealth proxy failed: {error})")
         return provider()
-    with session:
+    with session, _exit_on_termination():
         notice(f"{describe(session.port)} / stealth")
         try:
             return proxy.run_client(command, session.client_env(client), workspace, runner)
         finally:
             if session.tls_failed():
                 notice(TLS_HINT)
+
+
+class _exit_on_termination:
+    """Turn SIGTERM/SIGHUP into SystemExit so the session's cleanup runs.
+
+    mitmdump runs in its own session (Ctrl-C belongs to the client), so it would
+    otherwise outlive a kb that is terminated. The addon also exits on its own
+    when kb disappears without running any cleanup (kb_parent).
+    """
+
+    SIGNALS = (signal.SIGTERM, signal.SIGHUP)
+
+    def __enter__(self):
+        self.previous = {}
+        if threading.current_thread() is threading.main_thread():
+            for number in self.SIGNALS:
+                self.previous[number] = signal.signal(number, self._raise)
+        return self
+
+    @staticmethod
+    def _raise(number, _frame):
+        raise SystemExit(128 + number)
+
+    def __exit__(self, *_args):
+        for number, handler in self.previous.items():
+            signal.signal(number, handler)
 
 
 # --- kb ca-setup ----------------------------------------------------------

@@ -8,7 +8,9 @@ Only the model requests of the configured client are edited; every other flow is
 passed through unchanged. Diagnostics go to <bindings>/proxy.log, never to the
 client's terminal. Any error in a hook forwards the original request.
 """
+import asyncio
 import json
+import os
 from pathlib import Path
 import sys
 
@@ -40,11 +42,27 @@ class StealthKB:
         self.claude = None
         self.proxy = None
         self.conversations = {}
+        self.watcher = None
+        self.injected = False
 
     def load(self, loader):
         loader.add_option("kb_payload", str, "", "JSON file with the KB material kb prepared")
         loader.add_option("kb_bindings", str, "", "kb bindings dir (proxy.log and session bindings)")
         loader.add_option("kb_repo", str, "", "kb repository dir (imported for the injector rules)")
+        loader.add_option("kb_parent", int, 0, "kb's pid; mitmdump exits when kb is gone")
+
+    def running(self):
+        if ctx.options.kb_parent:
+            self.watcher = asyncio.get_running_loop().create_task(self._watch_parent())
+
+    def parent_gone(self):
+        return bool(ctx.options.kb_parent) and os.getppid() != ctx.options.kb_parent
+
+    async def _watch_parent(self):
+        while not self.parent_gone():
+            await asyncio.sleep(1)
+        self._log("stealth: kb exited without stopping mitmdump; shutting down")
+        ctx.master.shutdown()
 
     def configure(self, updated):
         if not {"kb_payload", "kb_bindings", "kb_repo"} & set(updated):
@@ -80,6 +98,11 @@ class StealthKB:
     def _log(self, message):
         if self.proxy is not None:
             self.proxy.log(message)
+
+    def _injected(self, where):
+        if not self.injected:
+            self.injected = True
+            self._log(f"stealth: KB injected into the first {self.client} request ({where})")
 
     def _is_codex(self, flow):
         request = flow.request
@@ -130,6 +153,7 @@ class StealthKB:
         edited = self._transform(conversation, _plain_headers(flow.request.headers), payload)
         if edited is not None:
             flow.request.content = self.proxy._dump(edited)
+            self._injected("HTTP")
 
     def _claude_http(self, flow):
         headers = _plain_headers(flow.request.headers)
@@ -138,6 +162,7 @@ class StealthKB:
         edited = self.claude.injector(flow.request.method, flow.request.path, headers, body)
         if edited is not None:
             flow.request.content = edited
+            self._injected("HTTP")
 
     def responseheaders(self, flow: http.HTTPFlow):
         conversation = flow.metadata.get("kb_conversation")
@@ -195,6 +220,7 @@ class StealthKB:
             edited = self._transform(conversation, _plain_headers(flow.request.headers), payload)
             if edited is not None:
                 message.text = json.dumps(edited, ensure_ascii=False)
+                self._injected("WebSocket")
         except Exception as error:  # noqa: BLE001 - forward the original frame
             self._log(f"stealth: WebSocket frame forwarded unchanged: {type(error).__name__}: {error}")
 

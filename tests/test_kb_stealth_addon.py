@@ -5,6 +5,7 @@ the plain python3 suite skips these tests.
 """
 import gzip
 import json
+import os
 from pathlib import Path
 import sys
 import tempfile
@@ -149,6 +150,7 @@ class AddonTests(unittest.TestCase):
         flow = self.ws_flow(headers=(("session-id", SID),))
         first = self.send(addon, flow, json.dumps({"type": "response.create", "input": [DEV, USER]}))
         self.assertEqual(json.loads(first)["input"], [DEV, *ITEMS, USER])
+        self.assertIn("KB injected into the first codex request (WebSocket)", (self.bindings / "proxy.log").read_text())
         self.assertEqual(proxy.read_binding(SID, "codex")["name"], "octane")
         server = '{"type":"response.completed","response":{"id":"r1","output":[]}}'
         self.assertEqual(self.send(addon, flow, server, from_client=False), server)
@@ -192,6 +194,15 @@ class AddonTests(unittest.TestCase):
                     request("chatgpt.com", "POST", "/backend-api/codex/responses", b'{"input":[]}')):
             original = req.content
             self.assertEqual(self.http_flow(addon, req).request.content, original)
+
+    def test_parent_watch(self):
+        addon = self.codex()
+        self.assertFalse(addon.parent_gone())
+        from mitmproxy import ctx
+        ctx.options.kb_parent = os.getppid()
+        self.assertFalse(addon.parent_gone())
+        ctx.options.kb_parent = os.getppid() + 100000
+        self.assertTrue(addon.parent_gone())
 
     # --- TLS -------------------------------------------------------------
 
