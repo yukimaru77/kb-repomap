@@ -321,7 +321,7 @@ def main(argv=None):
     paper_publish.add_argument("--store")
     paper_publish.add_argument("--source-repository-url", help="公式資料入力の元commitを含む公開用Git URL（公式資料付き最終KB）")
     paper_publish.add_argument("--main-source-repository-url", help="本論文入力の元commitを含む公開用Git URL（公式資料付き最終KB）")
-    decrypt_command = commands.add_parser("decrypt", help="blob数Nなら各波を2N並列で復元し、±2%以内のblobは打ち切る")
+    decrypt_command = commands.add_parser("decrypt", help="blob数Nなら各波を2N並列で復元し、±2%%以内のblobは打ち切る")
     decrypt_command.add_argument("name", type=store.name_value)
     decrypt_command.add_argument("--store")
     decrypt_command.add_argument("--pool-config", help="号池の接続JSON。省略時は build_args / KB_POOL_*")
