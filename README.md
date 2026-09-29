@@ -128,10 +128,12 @@ kb octane --file v1.00 claude --permission-mode bypassPermissions
 ### `--remote` でリクエストごとにKBを挿入する
 
 `--remote` を付けると、KBを起動引数に載せず、kbが起動中だけローカルのプロキシ
-（`127.0.0.1` のランダムポート）を立てます。Claude Codeには `ANTHROPIC_BASE_URL` で
-そのプロキシを指定し、`POST /v1/messages` の各リクエストの `system` に、最後の
-ブロックの直前へKBブロックを1つ挿入してから Anthropic API へ転送します。
+（`127.0.0.1` のランダムポート）を立てます。`POST /v1/messages` の各リクエストの `system` に、
+最後のブロックの直前へKBブロックを1つ挿入してから Anthropic API へ転送します。
 認証ヘッダーやSSE応答はそのまま中継し、`count_tokens` などの他のパスは変更しません。
+既定は **stealth 方式**で、Claude Code の設定・base URL は変えず `HTTPS_PROXY` と
+`NODE_EXTRA_CA_CERTS` だけを渡します（[`--remote` の方式](#--remote-の方式stealth--provider)）。
+以下の `ANTHROPIC_BASE_URL`・`ENABLE_TOOL_SEARCH` の項目は provider 方式のときだけです。
 
 ```bash
 kb octane --remote claude --model sonnet
@@ -140,10 +142,10 @@ kb octane --file v1.00 --remote claude -p "要点を教えて"
 
 - 事前に `kb decrypt octane`（`--file` を使う場合はそのファイル）を実行しておく必要があります。
 - KBの平文が `ps` やコマンドライン長の制限に乗らず、大きなKBもファイル読み込みなしで渡せます。
-- 既に `ANTHROPIC_BASE_URL` を設定している場合は、このセッションだけkbのプロキシで上書きします。
+- provider 方式: 既に `ANTHROPIC_BASE_URL` を設定している場合は、このセッションだけkbのプロキシで上書きします。
 - Claude Codeの終了とともにプロキシも停止し、終了コードはClaude Codeのものを返します。
-- 号池は使用しません。転送先は `KB_CLAUDE_UPSTREAM`（既定 `https://api.anthropic.com`）で変更できます。
-- `ENABLE_TOOL_SEARCH=true` を既定で設定します。Claude Codeは Anthropic 以外の base URL では
+- 号池は使用しません。provider 方式の転送先は `KB_CLAUDE_UPSTREAM`（既定 `https://api.anthropic.com`）で変更できます。
+- provider 方式では `ENABLE_TOOL_SEARCH=true` を既定で設定します。Claude Codeは Anthropic 以外の base URL では
   MCPツールの遅延読み込みを止めて全ツール定義を毎要求に前置きする（環境によっては16万トークン超）ため、
   kbのプロキシは tool_reference をそのまま転送し、通常どおりの必要時読み込みを保ちます。
   自分で値を設定していればそれを優先します。
@@ -239,7 +241,12 @@ kb octane --remote codex review --uncommitted
 kb octane --remote codex exec --help
 ```
 
-新構文の `--remote` は、Codexの起動中だけkbがローカルのプロキシ（`127.0.0.1` のランダムポート）を
+既定の stealth 方式では、Codexの設定・provider・ログインは変えず、`HTTPS_PROXY` だけを渡して
+chatgpt.com への推論（WebSocket の `response.create`、HTTPの `POST /backend-api/codex/responses`）に
+KBを挿入します（[`--remote` の方式](#--remote-の方式stealth--provider)）。
+以下はフォールバックの provider 方式（`pool-rr` 併用時も）の説明です。
+
+provider 方式の `--remote` は、Codexの起動中だけkbがローカルのプロキシ（`127.0.0.1` のランダムポート）を
 立て、起動するCodexプロセスだけに、そのプロキシを指す一時的なproviderを `-c` で設定します。
 プロキシは `POST .../responses` の `input` について、先頭の `role: system`/`developer` 項目の直後へ
 KB項目を挿入し、号池のクライアントキーを `Authorization` に付けて号池へ転送します
@@ -296,6 +303,53 @@ Gitの更新確認・再作成の質問・再作成しない場合の差分追�
 Codexの永続設定・環境は変更しない（子プロセスにだけ仮のキー `KB_NATIVE_POOL_KEY` を渡す）。
 **Macの透過ブリッジが同じ号池へ接続していること**が必要。号池側のRemote KB機能は不要。
 
+### `--remote` の方式（stealth / provider）
+
+`kb NAME --remote codex|claude` と `kb --remote codex|claude ...`（再開）は、次のどちらかで動きます。
+起動時の stderr の `Remote KB: proxy 127.0.0.1:<port> / ... / stealth`（または `/ provider`）で確認できます。
+
+- **stealth（既定）**: `mitmdump` が見つかれば、kbがセッションごとに mitmdump を
+  `127.0.0.1` のランダムポートで起動し、クライアントには `HTTPS_PROXY`（Claude Code は
+  `NODE_EXTRA_CA_CERTS` も）だけを渡します。TLSを終端するのは `chatgpt.com` と
+  `api.anthropic.com` だけで、それ以外のホストは中身に触れずに中継します。
+  書き換えるのは Codex の `/backend-api/codex/responses`（WebSocket・HTTP）と Claude の
+  `POST /v1/messages` だけです。クライアントの終了で mitmdump も止まり、終了コードはクライアントのものです。
+- **provider（フォールバック）**: 従来の loopback プロキシです。Codex は一時的な custom provider、
+  Claude は `ANTHROPIC_BASE_URL` でkbのプロキシを指します。mitmdump が見つからないときは
+  `Remote KB: provider mode (mitmdump not found; install: uv tool install mitmproxy)` と1行出してこちらで起動します。
+  既定モードで mitmdump の起動に失敗した場合も、理由を1行出してこちらに切り替えます。
+
+stealth 方式でクライアント側に**変わらないもの**:
+
+- 設定ファイル・ログイン状態・`CODEX_HOME`（`codex` ラッパーの選択を含む）。
+- Codex の provider（`/status` は `provider: openai` のまま）と WebSocket 通信、ChatGPT ログイン前提の機能。
+- Claude Code の base URL（`api.anthropic.com`）と MCP tool search（`/context` の MCP tools は必要時読み込みのまま）。
+  kbは `ANTHROPIC_BASE_URL`・`ENABLE_TOOL_SEARCH`・`-c model_provider=...` を設定しません。
+
+方式の選択:
+
+- `KB_REMOTE_MODE=provider` または `KB_REMOTE_MODE=stealth` で強制できます。
+  `stealth` を明示したのに mitmdump が見つからない・起動できない場合は、フォールバックせずにエラーで終了します。
+- **`pool-rr` 併用時（`KB_CODEX_CONFIG_OVERRIDES` がある Codex）は常に provider 方式**です。
+  RRの入口は号池のURLを指す必要があるためです。
+- mitmdump の探索順は `KB_MITMDUMP` → `PATH` の `mitmdump` →
+  `~/projects/codex-account-pool/bridge/.venv/bin/mitmdump` です。
+
+CA（`KB_CA_DIR`、既定 `~/.cache/kb/ca`）は mitmdump の初回起動で生成されます。
+`kb ca-setup` でCAの場所・mitmdumpの有無・信頼登録の状態と手順を表示します（CAが無ければ生成します）。
+
+```bash
+kb ca-setup
+# macOS（Codexに必要。Claude Code は NODE_EXTRA_CA_CERTS で足ります）
+security add-trusted-cert -d -r trustRoot -k ~/Library/Keychains/login.keychain-db ~/.cache/kb/ca/mitmproxy-ca-cert.pem
+```
+
+Linux は `update-ca-certificates`（`/usr/local/share/ca-certificates/` へコピー）か `trust anchor` で登録します。
+Codex がCAを信頼していないと推論がTLSエラーになり、kbは終了後に「`kb ca-setup` を実行」と1行表示します。
+mitmdump と addon の診断は `~/.cache/kb/bindings/proxy.log`（mitmdump自身の出力は同じ場所の
+`mitmdump.log`）にだけ書き、TUIには出しません。KB本体はセッション中だけ権限 0600 の一時ファイルで
+mitmdump に渡し、終了時に削除します。
+
 ### `--remote` セッションの再開
 
 kbは `--remote` で起動したセッションごとに、`~/.cache/kb/bindings/<セッションID>.json` へ
@@ -324,6 +378,7 @@ kb --remote claude --continue
   読み直して挿入します。起動時のKBではありません。
 - IDを指定した場合は起動前に binding を確認します。見つからないIDは「kbの `--remote` セッションでは
   ない」と1行表示し、KBを挿入せずにそのままクライアントを起動します。
+- stealth・provider のどちらの方式でも同じ binding を使います。
 - IDを指定しない再開（`codex resume` の選択画面・`--last`、`claude --continue`・`--resume` のみ）では、
   プロキシを起動しておき、最初の推論要求に含まれるセッションID（Claudeは `X-Claude-Code-Session-Id`）
   から binding を探します。見つからなければKBを挿入せずに転送します。
