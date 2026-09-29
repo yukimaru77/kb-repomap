@@ -240,10 +240,10 @@ def _launch(args, config):
     if hasattr(args, "native_args"):
         from kb_native import run
         return run(args, config, jsonl, workspace, context, **developer)
-    options = dict(developer)
     if getattr(args, "remote", False):
-        from kb_remote import RemoteKB
-        options["remote"] = RemoteKB(config, jsonl, **developer)
+        from kb_native import run_legacy_remote
+        return run_legacy_remote(args, config, jsonl, workspace, context, **developer)
+    options = dict(developer)
     session_id = kb_codex.start_session(jsonl, workspace, args.name, context,
                                         full_access=not args.no_yolo, prompt=args.prompt, **options)
     print(f"session: {session_id}", flush=True)
@@ -270,7 +270,10 @@ def main(argv=None):
         if any(value in ("--help", "-h", "--version", "-V") for value in option_args):
             os.execvp("codex", ["codex", *args.native_args])
             return
-        return launch(args, store.read_config())
+        code = launch(args, store.read_config())
+        if args.remote:
+            raise SystemExit(code)
+        return code
     if len(argv) > 1 and argv[0] not in management and "claude" in argv[1:]:
         from kb_claude import start
         boundary = argv.index("claude", 1)
@@ -341,7 +344,7 @@ def main(argv=None):
     mode.add_argument("--app", action="store_true")
     codex.add_argument("--no-yolo", action="store_true")
     codex.add_argument("--prompt")
-    codex.add_argument("--remote", action="store_true", help="号池にKBを登録し、推論時だけ挿入する")
+    codex.add_argument("--remote", action="store_true", help="kbのローカルプロキシで推論時だけKBを挿入する")
     for command in (creation, publish, paper_publish, codex, decrypt_command):
         command.add_argument("--file", default="latest.json", type=file_argument,
                              help="KBファイル名（.jsonは省略可、既定: latest.json、旧.jsonlも読込可、同名は上書き）")
@@ -393,7 +396,9 @@ def main(argv=None):
         selected = store.configured_stores(config, args.store)[0]
         print(store.publish(selected, args.name, info, args.jsonl, filename=args.file))
     elif args.command == "codex":
-        launch(args, config)
+        result = launch(args, config)
+        if isinstance(result, int):
+            raise SystemExit(result)
     elif args.command == "decrypt":
         from kb_decrypt import decrypt
         decrypt(args, config)

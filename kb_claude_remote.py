@@ -31,7 +31,7 @@ def make_server(block, upstream=None):
                              upstream or os.environ.get("KB_CLAUDE_UPSTREAM", DEFAULT_UPSTREAM))
 
 
-def start_remote(args, config, runner=subprocess.run):
+def start_remote(args, config, runner=None):
     if any(token == "--session-id" or token.startswith("--session-id=") for token in args.claude_args):
         raise ValueError("--session-id はkbが作成するため、Claude側では指定しないでください")
     loaded = store.find_kb(config, args.name, args.store, filename=args.file)

@@ -144,21 +144,35 @@ class RemoteKBTests(unittest.TestCase):
                                                           "sandbox": "danger-full-access", "approvalPolicy": "never"})
 
     def test_cli_remote_keeps_named_file_store_and_update_flow(self):
+        import kb_native
         loaded = {"store": {"name": "chosen"}, "jsonl": Path("v1.00.jsonl"),
                   "info": {"repository_url": "repo", "source_commit": "a" * 40, "branch": "main"}}
         config = {"build_args": ["--workers", "12"]}
-        with mock.patch.object(kb_cli.store, "read_config", return_value=config), \
+        remote = mock.Mock(origin="http://127.0.0.1:1", key="POOLKEY", items=["guidance", "kb"])
+        with tempfile.TemporaryDirectory() as temporary, \
+             mock.patch.dict(os.environ, {"CODEX_HOME": temporary, "KB_CODEX_CONFIG_OVERRIDES": "[]"}), \
+             mock.patch.object(kb_cli.store, "read_config", return_value=config), \
              mock.patch.object(kb_cli.store, "find_kb", return_value=loaded) as find, \
              mock.patch.object(kb_cli.store, "source_update", return_value=("b" * 40, "SOURCE DIFF")), \
-             mock.patch("kb_remote.RemoteKB") as constructor, \
+             mock.patch.object(kb_native, "RemoteKB", return_value=remote) as constructor, \
+             mock.patch.object(kb_native.proxy, "start") as start_proxy, \
              mock.patch.object(kb_codex, "start_session", return_value="new-id") as start, \
-             contextlib.redirect_stdout(io.StringIO()):
+             contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()) as err:
+            Path(temporary, "models_cache.json").write_text("{}")
+            start_proxy.return_value.url = "http://127.0.0.1:5"
+            start_proxy.return_value.port = 5
             kb_cli.main(["codex", "example", "--remote", "--store", "chosen", "--file", "v1.00",
                          "--session-only", "--rebuild", "never", "--prompt", "Use it"])
         find.assert_called_once_with(config, "example", "chosen", filename="v1.00.json")
-        constructor.assert_called_once_with(config, loaded["jsonl"])
+        constructor.assert_called_once_with(config, loaded["jsonl"], developer_text=None)
         self.assertEqual(start.call_args.args[3], "SOURCE DIFF")
-        self.assertEqual(start.call_args.kwargs["remote"], constructor.return_value)
+        # The seeded thread keeps the guidance locally; the proxy inserts the rest.
+        self.assertEqual(start_proxy.call_args.args[1], "http://127.0.0.1:1/backend-api/codex")
+        self.assertEqual(start_proxy.call_args.kwargs["set_headers"], {"Authorization": "Bearer POOLKEY"})
+        self.assertIn('model_provider="kb_pool"', start.call_args.kwargs["overrides"])
+        self.assertIn("http://127.0.0.1:5", " ".join(start.call_args.kwargs["overrides"]))
+        start.call_args.kwargs["remote"].bind("new-id", include_guidance=False)
+        self.assertIn("kb --remote codex resume new-id", err.getvalue())
 
     def test_empty_snapshot_is_rejected_before_creating_codex_session(self):
         with tempfile.TemporaryDirectory() as temporary:

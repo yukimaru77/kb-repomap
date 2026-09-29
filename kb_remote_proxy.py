@@ -378,11 +378,11 @@ def _ignore_interrupt():
     return signal.signal(signal.SIGINT, lambda *_args: None)
 
 
-def run_client(command, env, cwd, runner=subprocess.run):
+def run_client(command, env, cwd, runner=None):
     """Run the client with inherited stdio while the proxy is alive; return its exit code."""
     previous = _ignore_interrupt()
     try:
-        return runner(command, env=env, cwd=str(cwd)).returncode
+        return (runner or subprocess.run)(command, env=env, cwd=str(cwd)).returncode
     finally:
         if previous is not None:
             signal.signal(signal.SIGINT, previous)
