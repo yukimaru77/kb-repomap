@@ -280,15 +280,15 @@ def main(argv=None):
         parser.add_argument("--file", default="latest.json", type=file_argument)
         parser.add_argument("--workspace", default=".")
         parser.add_argument("--remote", action="store_true",
-                            help="Codex専用。Claudeは号池を経由しないため使えない")
+                            help="ローカルのプロキシ経由で各リクエストのsystemにKBを挿入する")
         args = parser.parse_args(argv[:boundary])
-        if args.remote:
-            parser.error("--remote は codex 専用です。Claude Code は Anthropic に直接つなぐため号池で注入できません。"
-                         "Claude には復号済み平文を system prompt として渡します: kb NAME claude ...")
         args.claude_args = argv[boundary + 1:]
         if any(value in ("--help", "-h", "--version") for value in args.claude_args):
             os.execvp("claude", ["claude", *args.claude_args])
             return
+        if args.remote:
+            from kb_claude_remote import start_remote
+            raise SystemExit(start_remote(args, store.read_config()))
         return start(args, store.read_config())
     parser = argparse.ArgumentParser(prog="kb", epilog="起動: kb NAME [KB options] codex|claude [client args...]")
     commands = parser.add_subparsers(dest="command", required=True)

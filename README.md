@@ -125,6 +125,25 @@ kb octane --file v1.00 claude --permission-mode bypassPermissions
 `decrypt` の成果物がない場合は、先に `kb decrypt octane` を実行してください。
 再作成を選んだ場合は同じファイル名を更新します。
 
+### `--remote` でリクエストごとにKBを挿入する
+
+`--remote` を付けると、KBを起動引数に載せず、kbが起動中だけローカルのプロキシ
+（`127.0.0.1` のランダムポート）を立てます。Claude Codeには `ANTHROPIC_BASE_URL` で
+そのプロキシを指定し、`POST /v1/messages` の各リクエストの `system` に、最後の
+ブロックの直前へKBブロックを1つ挿入してから Anthropic API へ転送します。
+認証ヘッダーやSSE応答はそのまま中継し、`count_tokens` などの他のパスは変更しません。
+
+```bash
+kb octane --remote claude --model sonnet
+kb octane --file v1.00 --remote claude -p "要点を教えて"
+```
+
+- 事前に `kb decrypt octane`（`--file` を使う場合はそのファイル）を実行しておく必要があります。
+- KBの平文が `ps` やコマンドライン長の制限に乗らず、大きなKBもファイル読み込みなしで渡せます。
+- 既に `ANTHROPIC_BASE_URL` を設定している場合は、このセッションだけkbのプロキシで上書きします。
+- Claude Codeの終了とともにプロキシも停止し、終了コードはClaude Codeのものを返します。
+- 号池は使用しません。転送先は `KB_CLAUDE_UPSTREAM`（既定 `https://api.anthropic.com`）で変更できます。
+
 旧版の `latest.jsonl` や名前付きJSONLも読み込めます。指定した `.json` がなく、同名の
 `.jsonl` がある場合は自動で旧ファイルを読みます。どちらもなければエラーになります。
 旧JSONLからもKB項目だけを抽出し、保存元のシステム指示やセッション情報は引き継ぎません。

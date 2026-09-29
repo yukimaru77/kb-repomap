@@ -59,8 +59,10 @@ class ClaudeContextTests(unittest.TestCase):
             "workspace": str(self.root), "claude_args": ["--model", "sonnet"],
         })()
         with mock.patch.object(kb_claude.os, "execvp", side_effect=SystemExit) as execvp, \
+             mock.patch.object(kb_claude.os, "chdir") as chdir, \
              self.assertRaises(SystemExit):
             kb_claude.start(args, {"stores": [self.loaded["store"]]})
+        chdir.assert_called_once_with(self.root.resolve())
         command = execvp.call_args.args[1]
         self.assertEqual(command[0:2], ["claude", "--session-id"])
         self.assertIn("--append-system-prompt", command)
