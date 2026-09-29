@@ -11,9 +11,11 @@ import json
 import os
 import re
 import signal
+import socket
 import subprocess
 import sys
 import threading
+import urllib.error
 from urllib.parse import urlsplit
 
 import kb_store as store
@@ -33,6 +35,25 @@ class RequestError(ValueError):
     def __init__(self, message, status=400):
         super().__init__(message)
         self.status = status
+
+
+class ClientDisconnected(ConnectionError):
+    """The client went away before its request body was fully received."""
+
+
+# Connection-level failures that are expected when a client or upstream drops a
+# socket; they are logged in one line and never reach the client's terminal.
+DISCONNECTS = (ConnectionError, socket.timeout, TimeoutError, http.client.IncompleteRead)
+
+
+def _is_disconnect(error):
+    if isinstance(error, urllib.error.URLError) and not isinstance(error, urllib.error.HTTPError):
+        return isinstance(error.reason, DISCONNECTS)
+    return isinstance(error, DISCONNECTS)
+
+
+def _describe(error):
+    return f"{type(error).__name__}: {error}".rstrip(": ")
 
 
 def _path(path):
@@ -266,19 +287,51 @@ def make_server(injector, upstream, on_request=None, set_headers=None):
         def log_message(self, *_args):
             pass
 
+        def log_request(self, *_args):
+            pass
+
+        def _client(self):
+            host, port = (tuple(self.client_address) + (None, None))[:2]
+            return f"{host}:{port}"
+
+        def _dropped(self, stage, error):
+            self.close_connection = True
+            log(f"proxy: {stage} dropped for {self._client()} {self.command or '-'} "
+                f"{_path(self.path or '-')}: {_describe(error)}")
+
+        def handle(self):
+            try:
+                super().handle()
+            except Exception as error:  # noqa: BLE001 - nothing may reach the terminal
+                if not _is_disconnect(error):
+                    raise
+                self._dropped("connection", error)
+
+        def _read_exact(self, size):
+            data = self.rfile.read(size)
+            if len(data) < size:
+                raise ClientDisconnected(f"request body ended after {len(data)} of {size} bytes")
+            return data
+
         def _read_body(self):
             if "chunked" in self.headers.get("Transfer-Encoding", "").lower():
                 chunks = []
                 while True:
-                    size = int(self.rfile.readline().split(b";", 1)[0].strip(), 16)
+                    line = self.rfile.readline()
+                    if not line:
+                        raise ClientDisconnected("request body ended inside chunked encoding")
+                    try:
+                        size = int(line.split(b";", 1)[0].strip(), 16)
+                    except ValueError as error:
+                        raise RequestError(f"invalid chunk size: {line[:40]!r}") from error
                     if size == 0:
                         while self.rfile.readline() not in (b"\r\n", b"\n", b""):
                             pass
                         return b"".join(chunks)
-                    chunks.append(self.rfile.read(size))
+                    chunks.append(self._read_exact(size))
                     self.rfile.readline()
             length = int(self.headers.get("Content-Length") or 0)
-            return self.rfile.read(length) if length else b""
+            return self._read_exact(length) if length else b""
 
         def _reply_error(self, status, message):
             data = json.dumps({"type": "error", "error": {"type": "kb_proxy_error", "message": message}}).encode()
@@ -289,7 +342,15 @@ def make_server(injector, upstream, on_request=None, set_headers=None):
             self.wfile.write(data)
 
         def _forward(self):
-            body = self._read_body()
+            try:
+                body = self._read_body()
+            except RequestError as error:
+                self.close_connection = True
+                return self._reply_quietly(error.status, str(error))
+            except Exception as error:  # noqa: BLE001
+                if not _is_disconnect(error):
+                    raise
+                return self._dropped("request read", error)
             headers = [(key, value) for key, value in self.headers.items()
                        if key.lower() not in HOP_BY_HOP | {"host", "content-length"} | replaced.keys()]
             headers += list((set_headers or {}).items())
@@ -298,7 +359,7 @@ def make_server(injector, upstream, on_request=None, set_headers=None):
                     on_request(self.command, self.path, self.headers, body)
                 edited = injector(self.command, self.path, self.headers, body)
             except RequestError as error:
-                return self._reply_error(error.status, str(error))
+                return self._reply_quietly(error.status, str(error))
             if edited is not None:
                 body = edited
                 headers = [(k, v) for k, v in headers if k.lower() != "content-encoding"]
@@ -312,13 +373,28 @@ def make_server(injector, upstream, on_request=None, set_headers=None):
                     connection.putheader(key, value)
                 connection.endheaders(body or None)
                 response = connection.getresponse()
-            except OSError as error:
+            except (OSError, http.client.HTTPException) as error:
                 connection.close()
-                return self._reply_error(502, f"upstream unavailable: {error}")
+                log(f"proxy: upstream unavailable for {self._client()} {self.command} "
+                    f"{_path(self.path)}: {_describe(error)}")
+                self.close_connection = True
+                return self._reply_quietly(502, f"upstream unavailable: {error}")
             try:
                 self._relay(response)
+            except Exception as error:  # noqa: BLE001
+                if not _is_disconnect(error):
+                    raise
+                self._dropped("response stream", error)
             finally:
                 connection.close()
+
+        def _reply_quietly(self, status, message):
+            try:
+                self._reply_error(status, message)
+            except Exception as error:  # noqa: BLE001
+                if not _is_disconnect(error):
+                    raise
+                self._dropped("error reply", error)
 
         def _relay(self, response):
             self.send_response_only(response.status, response.reason)
@@ -345,9 +421,18 @@ def make_server(injector, upstream, on_request=None, set_headers=None):
 
         do_GET = do_POST = do_PUT = do_PATCH = do_DELETE = do_HEAD = do_OPTIONS = _forward
 
-    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    server = QuietServer(("127.0.0.1", 0), Handler)
     server.daemon_threads = True
     return server
+
+
+class QuietServer(ThreadingHTTPServer):
+    """socketserver prints tracebacks to stderr by default; log one line to the file instead."""
+
+    def handle_error(self, request, client_address):
+        error = sys.exc_info()[1]
+        host, port = (tuple(client_address or ()) + (None, None))[:2]
+        log(f"proxy: request from {host}:{port} failed: {_describe(error) if error else 'unknown error'}")
 
 
 class Running:

@@ -1,9 +1,13 @@
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+import io
 import json
 from pathlib import Path
+import socket
+import struct
 import sys
 import tempfile
 import threading
+import time
 import unittest
 import urllib.error
 import urllib.request
@@ -141,6 +145,116 @@ class BindingTests(unittest.TestCase):
             self.assertEqual(proxy.read_binding("abc-123")["name"], "octane")
             with self.assertRaises(ValueError):
                 proxy.binding_path("../x")
+
+
+class TruncatingUpstream:
+    """Upstream that starts a chunked stream and then drops the connection."""
+
+    def __init__(self):
+        class Handler(BaseHTTPRequestHandler):
+            protocol_version = "HTTP/1.1"
+
+            def log_message(self, *_args):
+                pass
+
+            def do_POST(self):
+                self.rfile.read(int(self.headers.get("Content-Length") or 0))
+                self.send_response(200)
+                self.send_header("Content-Type", "text/event-stream")
+                self.send_header("Transfer-Encoding", "chunked")
+                self.end_headers()
+                self.wfile.write(b"6\r\ndata: \r\n")
+                self.wfile.flush()
+                self.connection.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0))
+                self.close_connection = True
+
+        self.server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+        self.url = f"http://127.0.0.1:{self.server.server_address[1]}/backend-api/codex"
+
+    def close(self):
+        self.server.shutdown()
+        self.server.server_close()
+
+
+class QuietDisconnectTests(unittest.TestCase):
+    """Dropped connections must never print to the client's terminal."""
+
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        patcher = mock.patch.object(proxy, "BINDINGS", Path(temporary.name))
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self.log = Path(temporary.name) / "proxy.log"
+        self.stderr = io.StringIO()
+        self.stdout = io.StringIO()
+        for name, stream in (("stderr", self.stderr), ("stdout", self.stdout)):
+            patcher = mock.patch.object(sys, name, stream)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def start(self, upstream_url):
+        running = proxy.start(proxy.codex_injector(ITEMS), upstream_url)
+        self.addCleanup(running.close)
+        return running
+
+    def log_lines(self, deadline=5.0):
+        end = time.monotonic() + deadline
+        while time.monotonic() < end:
+            if self.log.exists() and self.log.read_text(encoding="utf-8").strip():
+                time.sleep(0.2)  # let any further (unwanted) lines land
+                break
+            time.sleep(0.02)
+        return self.log.read_text(encoding="utf-8").splitlines() if self.log.exists() else []
+
+    def assert_quiet(self, lines):
+        self.assertEqual(self.stderr.getvalue(), "")
+        self.assertEqual(self.stdout.getvalue(), "")
+        self.assertEqual(len(lines), 1, lines)
+        self.assertNotIn("Traceback", lines[0])
+        self.assertRegex(lines[0], r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d proxy: .*127\.0\.0\.1:\d+")
+
+    def test_client_closing_mid_request_is_logged_quietly(self):
+        upstream = Upstream()
+        self.addCleanup(upstream.close)
+        running = self.start(upstream.url)
+        client = socket.create_connection(("127.0.0.1", running.port), timeout=5)
+        client.sendall(b"POST /responses HTTP/1.1\r\nHost: x\r\nContent-Type: application/json\r\n"
+                       b"Content-Length: 1000\r\n\r\n{\"input\": [")
+        client.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0))
+        client.close()
+        lines = self.log_lines()
+        self.assert_quiet(lines)
+        self.assertIn("request read dropped", lines[0])
+        self.assertEqual(upstream.requests, [])
+
+    def test_upstream_closing_mid_stream_is_logged_quietly(self):
+        upstream = TruncatingUpstream()
+        self.addCleanup(upstream.close)
+        running = self.start(upstream.url)
+        request = urllib.request.Request(running.url + "/responses", method="POST",
+                                         data=json.dumps({"input": [USER]}).encode(),
+                                         headers={"Content-Type": "application/json"})
+        try:
+            with urllib.request.urlopen(request, timeout=10) as response:
+                response.read()
+        except (OSError, proxy.http.client.HTTPException):
+            pass
+        lines = self.log_lines()
+        self.assert_quiet(lines)
+        self.assertIn("response stream dropped", lines[0])
+
+    def test_handle_error_writes_one_line_not_a_traceback(self):
+        running = self.start("http://127.0.0.1:9")
+        try:
+            raise ConnectionResetError(54, "Connection reset by peer")
+        except ConnectionResetError:
+            running.server.handle_error(None, ("127.0.0.1", 4242))
+        lines = self.log_lines()
+        self.assert_quiet(lines)
+        self.assertIn("127.0.0.1:4242", lines[0])
+        self.assertIn("ConnectionResetError", lines[0])
 
 
 if __name__ == "__main__":
