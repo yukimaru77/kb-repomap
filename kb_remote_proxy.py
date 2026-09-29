@@ -203,6 +203,123 @@ def inject_codex(payload, items):
     return _dump(payload)
 
 
+def insert_codex_items(payload, items):
+    """Insert items after the leading system/developer messages; None if input is not a list."""
+    source = payload.get("input")
+    if not isinstance(source, list):
+        return None
+    position = 0
+    while position < len(source) and isinstance(source[position], dict) \
+            and source[position].get("role") in ("system", "developer"):
+        position += 1
+    payload["input"] = [*source[:position], *items, *source[position:]]
+    return payload
+
+
+class CodexConversation:
+    """Per-connection history so previous_response_id deltas keep the KB (pool kbConversation).
+
+    The first complete input on a connection gets the KB. A delta that continues a
+    response whose history already holds the KB passes through unchanged. When the
+    KB need changes (inference after compaction, or the reverse), the delta is
+    expanded into the full client-visible history without previous_response_id.
+    A delta for a response this connection did not see is passed through untracked.
+    """
+
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.last_id = None
+        self.last_kb = False
+        self.last_input = []
+        self.pending_input = None
+        self.pending_kb = False
+        self.output = []
+
+    def transform(self, payload, items, compaction=False):
+        """Return the edited payload, or None to forward the original bytes unchanged."""
+        with self.lock:
+            source = payload.get("input")
+            if not isinstance(source, list):
+                return None
+            native = list(source)
+            wanted = bool(items) and not compaction
+            previous = payload.get("previous_response_id")
+            expand = False
+            if previous:
+                if previous != self.last_id:
+                    # The server holds a history kb cannot see; do not guess.
+                    self.pending_input, self.pending_kb, self.output = None, False, []
+                    return None
+                native = [*self.last_input, *native]
+                expand = self.last_kb != wanted
+                if expand:
+                    payload["previous_response_id"] = None
+                    payload["input"] = list(native)
+            self.pending_input, self.pending_kb, self.output = native, wanted, []
+            if wanted and (not previous or expand):
+                insert_codex_items(payload, items)
+                return payload
+            return payload if expand else None
+
+    def event(self, event):
+        """Observe one server event (a WebSocket frame or an SSE data line)."""
+        if not isinstance(event, dict):
+            return
+        with self.lock:
+            kind = event.get("type")
+            if kind == "response.output_item.done":
+                if isinstance(event.get("item"), dict):
+                    self.output.append(event["item"])
+            elif kind in ("response.completed", "response.incomplete"):
+                response = event.get("response") if isinstance(event.get("response"), dict) else {}
+                if not self.output and isinstance(response.get("output"), list):
+                    self.output = list(response["output"])
+                if self.pending_input is None:
+                    # Untracked continuation: later deltas cannot be expanded either.
+                    self.last_id, self.last_kb, self.last_input = None, False, []
+                else:
+                    self.last_id = response.get("id")
+                    self.last_kb = self.pending_kb
+                    # The trigger is a request command, not retained conversation history.
+                    retained = [item for item in self.pending_input
+                                if not (isinstance(item, dict) and item.get("type") == "compaction_trigger")]
+                    self.last_input = [*retained, *self.output]
+                self.pending_input, self.output = None, []
+            elif kind in ("response.failed", "error"):
+                self.pending_input, self.output = None, []
+
+
+class SSEEvents:
+    """Feed raw text/event-stream chunks; call on_event(dict) for each JSON data event."""
+
+    def __init__(self, on_event):
+        self.on_event = on_event
+        self.buffer = b""
+        self.data = []
+
+    def feed(self, chunk):
+        self.buffer += chunk
+        while True:
+            end = self.buffer.find(b"\n")
+            if end < 0:
+                return
+            line, self.buffer = self.buffer[:end].rstrip(b"\r"), self.buffer[end + 1:]
+            if not line:
+                self._dispatch()
+            elif line.startswith(b"data:"):
+                self.data.append(line[5:].lstrip(b" "))
+
+    def _dispatch(self):
+        if not self.data:
+            return
+        text, self.data = b"\n".join(self.data), []
+        try:
+            event = json.loads(text)
+        except (UnicodeDecodeError, ValueError):
+            return
+        self.on_event(event)
+
+
 def codex_injector(items):
     """Injector for Codex Responses requests; `items` may be a callable returning items or None."""
     def injector(method, path, headers, body):

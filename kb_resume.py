@@ -110,6 +110,10 @@ class CodexBinder:
             payload = json.loads(proxy.decoded(headers, body))
         except (proxy.RequestError, UnicodeDecodeError, ValueError):
             return
+        self.observe_payload(headers, payload)
+
+    def observe_payload(self, headers, payload):
+        """Bind the ids of one Responses request (HTTP body or WebSocket response.create)."""
         identity = proxy.codex_identity(headers, payload if isinstance(payload, dict) else {})
         with self.lock:
             if not self.resolved:
