@@ -261,7 +261,7 @@ def _launch(args, config):
 
 def main(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
-    management = {"register", "create", "store", "list", "publish", "publish-paper", "codex"}
+    management = {"register", "create", "store", "list", "publish", "publish-paper", "codex", "claude", "decrypt"}
     if len(argv) > 1 and argv[0] not in management and "codex" in argv[1:]:
         from kb_native import parse
         args = parse(argv)
@@ -271,7 +271,21 @@ def main(argv=None):
             os.execvp("codex", ["codex", *args.native_args])
             return
         return launch(args, store.read_config())
-    parser = argparse.ArgumentParser(prog="kb", epilog="Codex起動: kb NAME [--remote] [KB options] codex [CODEX args...]")
+    if len(argv) > 1 and argv[0] not in management and "claude" in argv[1:]:
+        from kb_claude import start
+        boundary = argv.index("claude", 1)
+        parser = argparse.ArgumentParser(prog="kb NAME [KB options] claude [CLAUDE args...]", allow_abbrev=False)
+        parser.add_argument("name", type=store.name_value)
+        parser.add_argument("--store")
+        parser.add_argument("--file", default="latest.json", type=file_argument)
+        parser.add_argument("--workspace", default=".")
+        args = parser.parse_args(argv[:boundary])
+        args.claude_args = argv[boundary + 1:]
+        if any(value in ("--help", "-h", "--version") for value in args.claude_args):
+            os.execvp("claude", ["claude", *args.claude_args])
+            return
+        return start(args, store.read_config())
+    parser = argparse.ArgumentParser(prog="kb", epilog="起動: kb NAME [KB options] codex|claude [client args...]")
     commands = parser.add_subparsers(dest="command", required=True)
     registration = commands.add_parser("register", help="URL・ブランチ・保存先を対話登録")
     registration.add_argument("name", nargs="?", type=store.name_value, help="KB名（省略すると質問）")
@@ -307,6 +321,10 @@ def main(argv=None):
     paper_publish.add_argument("--store")
     paper_publish.add_argument("--source-repository-url", help="公式資料入力の元commitを含む公開用Git URL（公式資料付き最終KB）")
     paper_publish.add_argument("--main-source-repository-url", help="本論文入力の元commitを含む公開用Git URL（公式資料付き最終KB）")
+    decrypt_command = commands.add_parser("decrypt", help="blob数Nなら各波を2N並列で復元し、±2%以内のblobは打ち切る")
+    decrypt_command.add_argument("name", type=store.name_value)
+    decrypt_command.add_argument("--store")
+    decrypt_command.add_argument("--pool-config", help="号池の接続JSON。省略時は build_args / KB_POOL_*")
     codex = commands.add_parser("codex", help="KBを取得して新規Codexセッションを起動")
     codex.add_argument("name", type=store.name_value)
     codex.add_argument("--store")
@@ -319,7 +337,7 @@ def main(argv=None):
     codex.add_argument("--no-yolo", action="store_true")
     codex.add_argument("--prompt")
     codex.add_argument("--remote", action="store_true", help="号池にKBを登録し、推論時だけ挿入する")
-    for command in (creation, publish, paper_publish, codex):
+    for command in (creation, publish, paper_publish, codex, decrypt_command):
         command.add_argument("--file", default="latest.json", type=file_argument,
                              help="KBファイル名（.jsonは省略可、既定: latest.json、旧.jsonlも読込可、同名は上書き）")
     args = parser.parse_args(argv)
@@ -371,6 +389,9 @@ def main(argv=None):
         print(store.publish(selected, args.name, info, args.jsonl, filename=args.file))
     elif args.command == "codex":
         launch(args, config)
+    elif args.command == "decrypt":
+        from kb_decrypt import decrypt
+        decrypt(args, config)
 
 
 if __name__ == "__main__":

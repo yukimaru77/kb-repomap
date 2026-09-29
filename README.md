@@ -82,6 +82,15 @@ kb octane --remote --rebuild always --clean codex
 作成には下記の `build_args` または `KB_POOL_*` による圧縮API接続先の設定が必要です。
 `kb list` では未作成KBを「未作成」と表示します。作成後は同じ名前で `kb codex xx` を使えます。
 
+保存済みblobの平文は `kb decrypt xx` で復元します。blob が N 個なら、各波は high と max を同時に N 本ずつ、合計 2N 並列です。順番は次の4波で、最大8回です。
+
+1. `gpt-6-luna` high と max
+2. `gpt-6-luna` high と max の2回目
+3. `gpt-5.6-luna` high と max
+4. `gpt-5.6-luna` high と max の2回目
+
+blobのトークン数から±2%以内のテキストが出たblobは、その波で打ち切ります。範囲内が複数なら、いちばん近いトークン数を採用します。最後まで範囲内がなければ、最も近いトークン数を採用します。出力したテキスト、採用した `raw.txt`、選定理由を `<KB名>/decrypt/<ファイル名>/` にcommit/pushします。完了済みの呼び出しは再実行しません。
+
 ### KBの保存名を指定する
 
 `--file` で `latest.json` 以外の名前を指定できます。省略時は `latest.json`。
@@ -101,6 +110,19 @@ kb list
 `kb list` はファイルごとに、KB名・保存先・作成commit・基準ブランチ・ファイル名を表示します。
 別名だけを作成した場合、`latest.json` の行は「未作成」のままです。
 `kb codex --file ...` の起動時も、そのファイルの作成commitから差分を確認します。
+
+## Claude Codeで復号済みKBを開く
+
+復号済みのKBをClaude Codeへ渡す場合は、保存先の `dev.txt` と
+`decrypt/<ファイル名>/` 配下の選択済み `raw.txt` を初期システムコンテキストにして、
+新しいローカルClaudeセッションを起動します。号池は使用しません。
+
+```bash
+kb octane claude --model sonnet
+kb octane --file v1.00 claude --permission-mode bypassPermissions
+```
+
+`decrypt` の成果物がない場合は、先に `kb decrypt octane` を実行してください。
 再作成を選んだ場合は同じファイル名を更新します。
 
 旧版の `latest.jsonl` や名前付きJSONLも読み込めます。指定した `.json` がなく、同名の
