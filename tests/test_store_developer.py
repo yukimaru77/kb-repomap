@@ -152,13 +152,16 @@ class StoreDeveloperTests(unittest.TestCase):
             stack.enter_context(mock.patch.object(kb_codex, "config_flags", return_value=[]))
             stack.enter_context(mock.patch.object(kb_remote, "pool_configuration",
                                                  return_value=("http://127.0.0.1:12345/_pool/rr", "test-key")))
-            opener = stack.enter_context(mock.patch.object(kb_remote.urllib.request, "build_opener"))
+            # kb's own proxy receives the remote items; capture what it would insert.
+            def start_proxy(remote, items, on_request=None):
+                bound.extend(items)
+                return mock.MagicMock(url="http://127.0.0.1:1", port=1), None
 
-            def receive(request, **kwargs):
-                bound.extend(json.loads(request.data)["items"])
-                return io.BytesIO(b'{"snapshot_id":"fixture","item_count":3}')
-
-            opener.return_value.open.side_effect = receive
+            stack.enter_context(mock.patch.object(kb_native, "start_proxy", side_effect=start_proxy))
+            stack.enter_context(mock.patch.object(kb_native, "proxy_overrides", return_value=[]))
+            stack.enter_context(mock.patch.object(kb_native.proxy, "run_client", return_value=0))
+            bindings = stack.enter_context(tempfile.TemporaryDirectory())
+            stack.enter_context(mock.patch.object(kb_native.proxy, "BINDINGS", Path(bindings)))
             stack.enter_context(mock.patch.object(kb_native, "remote_command",
                                                  return_value=(["codex", "exec", "hello"], {})))
             stack.enter_context(mock.patch.object(kb_native_local, "command",
@@ -172,7 +175,10 @@ class StoreDeveloperTests(unittest.TestCase):
             options = ["--workspace", str(self.workspace)] + (["--remote"] if remote else [])
             argv = (["example", *options, "codex", "exec", "hello"] if native else
                     ["codex", "example", *options, "--session-only"])
-            kb_cli.main(argv)
+            try:
+                kb_cli.main(argv)
+            except SystemExit as exit_:
+                self.assertEqual(exit_.code, 0)
         injected = [item for call in server.request.call_args_list
                     if call.args[0] == "thread/inject_items" for item in call.args[1]["items"]]
         server.run_turn.assert_not_called()

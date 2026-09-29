@@ -121,7 +121,8 @@ def run_remote(native_args, remote, items, workspace, *, on_request=None, runner
     running, provider = start_proxy(remote, items, on_request)
     with running:
         command, env = remote_command(native_args, running.url, provider)
-        count = len(items) if isinstance(items, list) else "lazy"
+        fixed = items if isinstance(items, list) else getattr(getattr(items, "__self__", None), "cached", None)
+        count = len(fixed) if isinstance(fixed, list) else "lazy"
         print(f"Remote KB: proxy 127.0.0.1:{running.port} / {count} items", file=sys.stderr, flush=True)
         return proxy.run_client(command, env, workspace, runner)
 
@@ -133,7 +134,10 @@ def run(args, config, snapshot, workspace, context, *, developer_text=None):
             remote.items.append({"type": "message", "role": "user", "content": [
                 {"type": "input_text", "text": context}]})
         # kb's proxy inserts the items into each inference; nothing is bound in the pool.
-        return run_remote(args.native_args, remote, remote.items, workspace)
+        # The session id is Codex's, so bind it when the first request shows it.
+        from kb_resume import CodexBinder
+        binder = CodexBinder(config, _record(args), remote.items)
+        return run_remote(args.native_args, remote, remote.items, workspace, on_request=binder.observe)
     from kb_native_local import command as local_command, seed_overrides
     # Validate the command shape before creating a persisted session.
     local_command(args.native_args, "validation-only")
@@ -153,11 +157,14 @@ def run_legacy_remote(args, config, snapshot, workspace, context, *, developer_t
     remote = RemoteKB(config, snapshot, developer_text=developer_text)
     # The seeded thread persists the guidance item (and update context) locally,
     # so the proxy inserts the rest; nothing is doubled.
-    running, provider = start_proxy(remote, remote.items[1:])
+    from kb_resume import CodexBinder
+    record = {**_record(args), "local_guidance": True}
+    binder = CodexBinder(config, record, remote.items[1:])
+    running, provider = start_proxy(remote, remote.items[1:], on_request=binder.observe)
     with running:
         added = proxy_overrides(running.url, provider)
         os.environ["KB_NATIVE_POOL_KEY"] = PROXY_KEY
-        seeded = _Seeded(args)
+        seeded = _Seeded(record)
         session_id = kb_codex.start_session(snapshot, workspace, args.name, context,
                                             full_access=not args.no_yolo, prompt=args.prompt,
                                             remote=seeded, overrides=added, developer_text=developer_text)
@@ -176,11 +183,17 @@ def run_legacy_remote(args, config, snapshot, workspace, context, *, developer_t
         return proxy.run_client(command, dict(os.environ), workspace, runner)
 
 
-class _Seeded:
-    """Stands in for the pool binding in kb_codex.start_session."""
+def _record(args):
+    return {"name": args.name, "store": getattr(args, "resolved_store", None) or args.store, "file": args.file}
 
-    def __init__(self, args):
-        self.args = args
+
+class _Seeded:
+    """Stands in for the pool binding in kb_codex.start_session: write kb's binding."""
+
+    def __init__(self, record):
+        self.record = record
 
     def bind(self, session_id, *, include_guidance=True):
+        proxy.write_binding(session_id, "codex", self.record["name"], self.record["store"], self.record["file"],
+                            source="thread/start", local_guidance=not include_guidance)
         return session_id

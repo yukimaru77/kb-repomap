@@ -233,6 +233,7 @@ def _launch(args, config):
     elif not paper:
         print("KBは基準ブランチと同じcommitです。", flush=True)
     workspace = Path(args.workspace).expanduser().resolve()
+    args.resolved_store = loaded["store"]["name"]
     developer = {}
     if loaded.get("developer_text") and loaded["developer_text"].strip():
         developer["developer_text"] = loaded["developer_text"]
@@ -262,6 +263,10 @@ def _launch(args, config):
 def main(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
     management = {"register", "create", "store", "list", "publish", "publish-paper", "codex", "claude", "decrypt"}
+    if argv[:1] == ["--remote"] and argv[1:2] and argv[1] in ("codex", "claude"):
+        # Resume a kb --remote session by its saved binding; the KB name is not needed.
+        from kb_resume import main as resume
+        raise SystemExit(resume(argv[1], argv[2:], store.read_config()))
     if len(argv) > 1 and argv[0] not in management and "codex" in argv[1:]:
         from kb_native import parse
         args = parse(argv)
@@ -293,7 +298,8 @@ def main(argv=None):
             from kb_claude_remote import start_remote
             raise SystemExit(start_remote(args, store.read_config()))
         return start(args, store.read_config())
-    parser = argparse.ArgumentParser(prog="kb", epilog="起動: kb NAME [KB options] codex|claude [client args...]")
+    parser = argparse.ArgumentParser(prog="kb", epilog="起動: kb NAME [KB options] codex|claude [client args...] / "
+                                     "--remote の再開: kb --remote codex resume [ID] | kb --remote claude --resume ID")
     commands = parser.add_subparsers(dest="command", required=True)
     registration = commands.add_parser("register", help="URL・ブランチ・保存先を対話登録")
     registration.add_argument("name", nargs="?", type=store.name_value, help="KB名（省略すると質問）")

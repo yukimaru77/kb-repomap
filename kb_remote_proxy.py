@@ -9,7 +9,6 @@ import http.client
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import os
-from pathlib import Path
 import re
 import signal
 import subprocess
@@ -206,15 +205,19 @@ def binding_path(session_id):
     return BINDINGS / f"{session_id}.json"
 
 
-def write_binding(session_id, client, name, store_name, filename, *, source=None, overwrite=True):
+def write_binding(session_id, client, name, store_name, filename, *, source=None, overwrite=True,
+                  local_guidance=False):
     path = binding_path(session_id)
     if not overwrite and path.exists():
-        return path
+        return None
     path.parent.mkdir(parents=True, exist_ok=True)
     record = {"client": client, "name": name, "store": store_name, "file": filename,
               "created": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds")}
     if source:
         record["id_source"] = source
+    if local_guidance:
+        # Legacy seeded threads persist the guidance item; resume injects the rest.
+        record["local_guidance"] = True
     temporary = path.with_suffix(f".{os.getpid()}.tmp")
     temporary.write_text(json.dumps(record, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     temporary.chmod(0o600)

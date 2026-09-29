@@ -1,6 +1,7 @@
 import gzip
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
+import tempfile
 import threading
 import unittest
 import urllib.error
@@ -146,9 +147,16 @@ class StartRemoteTests(unittest.TestCase):
     def test_start_remote_runs_claude_through_the_proxy(self):
         upstream = FakeUpstream()
         self.addCleanup(upstream.close)
-        mock.patch.dict(kb_claude_remote.os.environ, {
+        bindings = tempfile.TemporaryDirectory()
+        self.addCleanup(bindings.cleanup)
+        patcher = mock.patch.object(kb_claude_remote.proxy, "BINDINGS", Path(bindings.name))
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        environment = mock.patch.dict(kb_claude_remote.os.environ, {
             "KB_CLAUDE_UPSTREAM": upstream.url, "ANTHROPIC_BASE_URL": "https://example.invalid",
-        }).start()
+        })
+        environment.start()
+        self.addCleanup(environment.stop)
         args = type("Args", (), {
             "name": "example", "file": "latest.json", "store": "test",
             "workspace": str(self.root), "claude_args": ["-p", "hi"],
@@ -177,6 +185,8 @@ class StartRemoteTests(unittest.TestCase):
         output = "".join(call.args[0] for call in stderr.write.call_args_list)
         self.assertIn("上書き", output)
         self.assertIn("Remote KB: proxy 127.0.0.1:", output)
+        record = kb_claude_remote.proxy.read_binding(seen["command"][2], "claude")
+        self.assertEqual((record["name"], record["file"]), ("example", "latest.json"))
 
     def test_start_remote_rejects_session_id(self):
         args = type("Args", (), {

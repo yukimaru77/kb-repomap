@@ -143,6 +143,8 @@ kb octane --file v1.00 --remote claude -p "要点を教えて"
 - 既に `ANTHROPIC_BASE_URL` を設定している場合は、このセッションだけkbのプロキシで上書きします。
 - Claude Codeの終了とともにプロキシも停止し、終了コードはClaude Codeのものを返します。
 - 号池は使用しません。転送先は `KB_CLAUDE_UPSTREAM`（既定 `https://api.anthropic.com`）で変更できます。
+- セッションIDはkbが作成し、起動時に binding（後述）を保存します。再開は
+  `kb --remote claude --resume ID` で行います（[`--remote` セッションの再開](#--remote-セッションの再開)）。
 
 旧版の `latest.jsonl` や名前付きJSONLも読み込めます。指定した `.json` がなく、同名の
 `.jsonl` がある場合は自動で旧ファイルを読みます。どちらもなければエラーになります。
@@ -190,7 +192,7 @@ commitを固定して登録します。別の履歴の上流リポジトリを�
 `kb codex --rebuild always` は論文KBでは使用しません。
 
 
-### 号池から推論時だけKBを挿入する
+### 推論時だけKBを挿入する（`--remote`）
 
 新しい起動構文は `kb <KB名> [KBオプション] codex [Codexの引数...]` です。
 `codex` より後はCodex自身が解釈します。KB用の `--remote`・`--store`・`--file`・
@@ -198,7 +200,7 @@ commitを固定して登録します。別の履歴の上流リポジトリを�
 
 通常起動・`--remote` ともに、次の英語の案内を `role: developer` で渡します。
 保存済みの暗号化blobは変更せず、旧「KB憲章」は起動時にこの案内へ置き換えます。
-新構文のRemote KBでは案内もbindingに含め、旧構文ではセッション側へ一度だけ挿入します。
+新構文のRemote KBでは案内もプロキシが挿入し、旧構文ではセッション側へ一度だけ挿入します。
 KBの準備だけでは user メッセージや推論を自動で開始しません。
 新構文の依頼文・標準入力はCodex自身へ渡し、旧構文は明示した `--prompt` だけを実行します。
 
@@ -213,7 +215,7 @@ KBと同じ保存先commitから取得し、元資料のリポジトリや現在
 `dev.txt` は自動では読みません。ファイルがない場合や空の場合は従来どおりです。
 
 新旧の起動構文・TUI・`exec`・`--app`・`--remote`・`pool-rr` で共通です。
-ローカル方式ではセッションへ挿入し、Remote方式では号池のbindingに含めます。
+ローカル方式ではセッションへ挿入し、Remote方式ではkbのプロキシが各推論へ挿入します。
 暗号化blobや `latest.json` 自体は変更しません。編集を保存先へpushすると次回の
 新規起動から反映され、すでに起動したセッションの指示は変わりません。
 
@@ -231,15 +233,23 @@ kb octane --remote codex review --uncommitted
 kb octane --remote codex exec --help
 ```
 
-新構文の `--remote` は、号池にKBの親bindingを登録し、起動するCodexプロセスだけに
-親IDのヘッダーを設定します。Codexが作った本来のセッションへ号池がKBを継承・保存するため、
-`exec` を `exec resume` に変換せず実行します。最初の余分な推論もありません。
-通常は号池のfill-first経路、`pool-rr` 付きならRR経路を使用します。
+新構文の `--remote` は、Codexの起動中だけkbがローカルのプロキシ（`127.0.0.1` のランダムポート）を
+立て、起動するCodexプロセスだけに、そのプロキシを指す一時的なproviderを `-c` で設定します。
+プロキシは `POST .../responses` の `input` について、先頭の `role: system`/`developer` 項目の直後へ
+KB項目を挿入し、号池のクライアントキーを `Authorization` に付けて号池へ転送します
+（Codex側には仮のキーしか渡しません）。`compaction_trigger` を含む要求・`request_kind: compaction`・
+`/responses/compact`・`/models` などは変更せずに転送します。`previous_response_id` 付きの要求は
+履歴全体がないためKBを挿入できず、プロキシが400で拒否します（HTTPのSSE接続では送られません）。
+号池は単なるアカウントの中継で、号池側のKB登録（`/_pool/kb/bind`）は使いません。
+Codexが作った本来のセッションをそのまま使うため、`exec` を `exec resume` に変換せず実行します。
+最初の余分な推論もありません。
+通常は号池のfill-first経路（`<origin>/backend-api/codex`）、`pool-rr` 付きならRR経路へ転送します。
+`pool-rr` のproviderは `base_url` だけをプロキシへ向け、WebSocketは使いません。
 モデル一覧は通常のCodexが保存した `~/.codex/models_cache.json`（`CODEX_HOME`対応）を使います。
 起動時のKB診断はstderrへ出し、stdout・stdin・終了コードはCodexのままです。
 Codexの永続設定・ログイン状態は変更しません。provider自体を別サービスへ変える
-`-c model_provider=...` などとは併用しないでください。既存セッションに別のKBが
-登録済みの場合、その既存bindingが優先されます。
+`-c model_provider=...` などとは併用しないでください。
+Codexの終了とともにプロキシも停止します。最初の推論要求で見えたセッションIDの binding を保存します。
 
 `--remote` を省略したローカルKBでは、KBを注入したセッションを作り、TUIまたは
 `exec resume` で起動します。Codexのオプションはインストール済みCLIのヘルプから
@@ -261,27 +271,59 @@ kb codex octane --remote --file v1.00.json --store work
 kb codex octane --remote --session-only --rebuild never
 ```
 
-`--remote` は、KBを号池に登録して新しいネイティブCodexセッションへ紐付ける。
-KB本体をローカルのCodex履歴に入れず、号池が推論要求の先頭のsystem/developer項目の後へ挿入する。
+`--remote` は、新しいネイティブCodexセッションを作り、kbのプロキシ経由で `codex resume` する。
+KB本体をローカルのCodex履歴に入れず、プロキシが推論要求の先頭のsystem/developer項目の後へ挿入する。
 会話のcompaction blobがある場合も、その前に置く。コンパクト要求にはKBを含めない。
-サブエージェントは通信上の親セッション情報を通して同じKBを継承する。
+案内（developer）と更新差分はセッション側へ一度だけ保存し、プロキシはそれ以外のKB項目を挿入する。
+サブエージェントは同じCodexプロセスから送られるため、同じKBが挿入される。
 
-登録するのは保存されたKB項目の配列。複数の独立blobとKB憲章の順序を保つ。
+挿入するのは保存されたKB項目の配列。複数の独立blobとKB憲章の順序を保つ。
 起動時にその内容を固定するため、あとで `latest.json` を更新しても稼働中のセッションは変わらない。
 Gitの更新確認・再作成の質問・再作成しない場合の差分追加は、通常の `kb codex` と共通。
-`--app`、`--session-only`、`--prompt`、`--file` も併用できる。
+`--prompt`、`--file` も併用できる。`--app` と `--session-only` ではkbの終了とともにプロキシも
+止まるため、その後のKB付きの続行は `kb --remote codex resume ID` で行う。
 
 接続には既存の `~/.config/kb/config.json` の `build_args` にある `--pool-config` で
 号池の共通JSON（例: `codex-account-pool/bridge.json`）を指定できる。
 既存の `--origin`、`--key-file`、必要なら `--private-http` と `KB_POOL_*` も使える。
 `pool-rr` が渡す `KB_POOL_ORIGIN`、`KB_POOL_KEY_FILE`、`KB_POOL_PRIVATE_HTTP` は保存済みの指定より優先する。
-Codexの環境変数を設定することはない。
-新しい接続設定は不要。**Macの透過ブリッジが同じ号池へ接続していること**と、
-Remote KB対応版の `codex-account-pool` が必要。登録エラーの場合、最初のターンは送信しない。
+Codexの永続設定・環境は変更しない（子プロセスにだけ仮のキー `KB_NATIVE_POOL_KEY` を渡す）。
+**Macの透過ブリッジが同じ号池へ接続していること**が必要。号池側のRemote KB機能は不要。
 
-起動直後の先行WebSocket接続を残さないため、空セッションの作成・登録・保存後にapp-serverを
-一度終了し、同じセッションを再開して最初のターンを送る。Codexの設定・認証・バイナリは変更しない。
-号池側の詳細: `https://github.com/yukimaru77/codex-account-pool/blob/main/docs/remote-kb.md`
+### `--remote` セッションの再開
+
+kbは `--remote` で起動したセッションごとに、`~/.cache/kb/bindings/<セッションID>.json` へ
+binding を保存します。
+
+```json
+{"client": "codex", "name": "octane", "store": "pepabo", "file": "latest.json", "created": "2026-09-29T14:00:25+00:00"}
+```
+
+- Claude: kbがセッションIDを作るため、起動時に保存します。
+- Codex: 最初の `/responses` 要求の `client_metadata`（`x-codex-turn-metadata` の `thread_id` など）や
+  `Session-Id`/`Thread-Id` ヘッダーからセッションIDを取り、保存します。どの値を使ったかは
+  binding の `id_source` と `~/.cache/kb/bindings/proxy.log` に残ります。
+
+再開時はKB名を指定せず、kb経由でクライアントを起動します。
+
+```bash
+kb --remote codex resume 01a0ed77-74f8-74c1-9e1e-154c926b22ea
+kb --remote codex resume            # TUIの選択画面や --last も可
+kb --remote codex exec resume --last "続きをお願いします"
+kb --remote claude --resume 6222add9-51b5-486c-85a6-168b4f46e295
+kb --remote claude --continue
+```
+
+- binding の保存先・KB名・ファイル名から、**再開時点の保存先の内容（最新のKB・dev.txt・更新差分）**を
+  読み直して挿入します。起動時のKBではありません。
+- IDを指定した場合は起動前に binding を確認します。見つからないIDは「kbの `--remote` セッションでは
+  ない」と1行表示し、KBを挿入せずにそのままクライアントを起動します。
+- IDを指定しない再開（`codex resume` の選択画面・`--last`、`claude --continue`・`--resume` のみ）では、
+  プロキシを起動しておき、最初の推論要求に含まれるセッションID（Claudeは `X-Claude-Code-Session-Id`）
+  から binding を探します。見つからなければKBを挿入せずに転送します。
+- 再開やforkで新しいセッションIDが使われた場合も、同じKBの binding を追加で保存します。
+- **kbを経由しない通常の `codex resume` や `claude --resume` では、KBは挿入されません。**
+  Remote KBの本体はセッション履歴に保存されていないためです。
 
 ### 通常のローカルKB
 

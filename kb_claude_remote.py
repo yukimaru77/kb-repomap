@@ -1,11 +1,10 @@
 """Run Claude Code through a loopback proxy that injects the decrypted KB."""
 import os
 from pathlib import Path
-import subprocess
-import sys
 import uuid
 
 import kb_claude
+import kb_resume
 import kb_remote_proxy as proxy
 import kb_store as store
 
@@ -39,14 +38,10 @@ def start_remote(args, config, runner=None):
     block = {"type": "text", "text": PREAMBLE + context}
     session_id = str(uuid.uuid4())
     workspace = Path(args.workspace).expanduser().resolve()
-    with proxy.Running(make_server(block), name="kb-claude-proxy") as running:
-        env = dict(os.environ)
-        if env.get("ANTHROPIC_BASE_URL"):
-            print(f"kb: ANTHROPIC_BASE_URL={env['ANTHROPIC_BASE_URL']} はこのセッションではkbのプロキシで上書きします",
-                  file=sys.stderr, flush=True)
-        env["ANTHROPIC_BASE_URL"] = running.url
-        command = ["claude", "--session-id", session_id, *args.claude_args]
-        print(f"KB: {args.name}/{args.file} / Claude session: {session_id}", file=sys.stderr, flush=True)
-        print(f"Remote KB: proxy 127.0.0.1:{running.port} / {len(block['text'].encode('utf-8'))} bytes",
-              file=sys.stderr, flush=True)
-        return proxy.run_client(command, env, workspace, runner)
+    record = {"name": args.name, "store": loaded["store"]["name"], "file": args.file}
+    # kb owns the Claude session id, so the binding exists before the first request.
+    proxy.write_binding(session_id, "claude", record["name"], record["store"], record["file"], source="kb --session-id")
+    binder = kb_resume.ClaudeBinder(config, record, block)
+    return kb_resume.run_claude(["--session-id", session_id, *args.claude_args], binder, workspace,
+                                session_label=f"KB: {args.name}/{args.file} / Claude session: {session_id}",
+                                runner=runner)

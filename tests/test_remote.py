@@ -171,7 +171,12 @@ class RemoteKBTests(unittest.TestCase):
         self.assertEqual(start_proxy.call_args.kwargs["set_headers"], {"Authorization": "Bearer POOLKEY"})
         self.assertIn('model_provider="kb_pool"', start.call_args.kwargs["overrides"])
         self.assertIn("http://127.0.0.1:5", " ".join(start.call_args.kwargs["overrides"]))
-        start.call_args.kwargs["remote"].bind("new-id", include_guidance=False)
+        with tempfile.TemporaryDirectory() as bindings, \
+             mock.patch.object(kb_native.proxy, "BINDINGS", Path(bindings)):
+            start.call_args.kwargs["remote"].bind("new-id", include_guidance=False)
+            record = kb_native.proxy.read_binding("new-id", "codex")
+        self.assertEqual((record["name"], record["store"], record["file"], record["local_guidance"]),
+                         ("example", "chosen", "v1.00.json", True))
         self.assertIn("kb --remote codex resume new-id", err.getvalue())
 
     def test_empty_snapshot_is_rejected_before_creating_codex_session(self):
