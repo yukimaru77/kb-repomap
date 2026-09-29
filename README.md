@@ -143,6 +143,12 @@ kb octane --file v1.00 --remote claude -p "要点を教えて"
 - 既に `ANTHROPIC_BASE_URL` を設定している場合は、このセッションだけkbのプロキシで上書きします。
 - Claude Codeの終了とともにプロキシも停止し、終了コードはClaude Codeのものを返します。
 - 号池は使用しません。転送先は `KB_CLAUDE_UPSTREAM`（既定 `https://api.anthropic.com`）で変更できます。
+- `ENABLE_TOOL_SEARCH=true` を既定で設定します。Claude Codeは Anthropic 以外の base URL では
+  MCPツールの遅延読み込みを止めて全ツール定義を毎要求に前置きする（環境によっては16万トークン超）ため、
+  kbのプロキシは tool_reference をそのまま転送し、通常どおりの必要時読み込みを保ちます。
+  自分で値を設定していればそれを優先します。
+- Claude Code のコンテキスト表示はモデルIDで窓の大きさを決めます。大きなKBでは
+  `--model 'claude-fable-5-1[1m]'` のように `[1m]` 付きIDを渡すと 1M 窓として計測されます。
 - セッションIDはkbが作成し、起動時に binding（後述）を保存します。再開は
   `kb --remote claude --resume ID` で行います（[`--remote` セッションの再開](#--remote-セッションの再開)）。
 

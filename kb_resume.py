@@ -229,6 +229,11 @@ def run_claude(claude_args, binder, workspace, *, session_label, runner=None):
         if env.get("ANTHROPIC_BASE_URL"):
             notice(f"kb: ANTHROPIC_BASE_URL={env['ANTHROPIC_BASE_URL']} はこのセッションではkbのプロキシで上書きします")
         env["ANTHROPIC_BASE_URL"] = running.url
+        # Claude Code disables MCP tool search behind non-Anthropic base URLs,
+        # which would inline every MCP tool schema (~160k tokens) into each
+        # request. The kb proxy forwards tool_reference blocks unchanged, so
+        # keep the on-demand loading the user gets without the proxy.
+        env.setdefault("ENABLE_TOOL_SEARCH", "true")
         size = len(binder.block["text"].encode("utf-8")) if binder.block else "lazy"
         notice(f"{session_label}\nRemote KB: proxy 127.0.0.1:{running.port} / {size} bytes")
         return proxy.run_client(["claude", *claude_args], env, workspace, runner)

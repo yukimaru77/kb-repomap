@@ -178,6 +178,9 @@ class StartRemoteTests(unittest.TestCase):
         self.assertEqual(seen["command"][3:], ["-p", "hi"])
         self.assertNotIn("--append-system-prompt", seen["command"])
         self.assertRegex(seen["env"]["ANTHROPIC_BASE_URL"], r"^http://127\.0\.0\.1:\d+$")
+        # Behind a non-Anthropic base URL Claude Code inlines every MCP tool
+        # schema unless tool search is explicitly enabled.
+        self.assertEqual(seen["env"]["ENABLE_TOOL_SEARCH"], "true")
         self.assertEqual(seen["cwd"], str(self.root.resolve()))
         injected = json.loads(upstream.requests[0]["body"])["system"][0]["text"]
         self.assertIn("復号された知識", injected)
