@@ -262,7 +262,8 @@ def _launch(args, config):
 
 def main(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
-    management = {"register", "create", "store", "list", "publish", "publish-paper", "codex", "claude", "decrypt"}
+    management = {"register", "create", "store", "list", "publish", "publish-paper", "codex", "claude", "decrypt",
+                  "ca-setup"}
     if argv[:1] == ["--remote"] and argv[1:2] and argv[1] in ("codex", "claude"):
         # Resume a kb --remote session by its saved binding; the KB name is not needed.
         from kb_resume import main as resume
@@ -339,6 +340,7 @@ def main(argv=None):
     decrypt_command.add_argument("name", type=store.name_value)
     decrypt_command.add_argument("--store")
     decrypt_command.add_argument("--pool-config", help="号池の接続JSON。省略時は build_args / KB_POOL_*")
+    commands.add_parser("ca-setup", help="--remote のstealth方式で使うCAの場所と信頼登録の手順を表示")
     codex = commands.add_parser("codex", help="KBを取得して新規Codexセッションを起動")
     codex.add_argument("name", type=store.name_value)
     codex.add_argument("--store")
@@ -355,6 +357,9 @@ def main(argv=None):
         command.add_argument("--file", default="latest.json", type=file_argument,
                              help="KBファイル名（.jsonは省略可、既定: latest.json、旧.jsonlも読込可、同名は上書き）")
     args = parser.parse_args(argv)
+    if args.command == "ca-setup":
+        from kb_stealth import ca_setup
+        return ca_setup()
     config = store.read_config()
     if args.command == "register":
         register(args, config)

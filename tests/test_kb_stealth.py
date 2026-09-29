@@ -195,6 +195,21 @@ class LauncherTests(FakeMitmdump):
                           runner=runner, env=self.env)
         self.assertIn("kb ca-setup", sys.stderr.getvalue())
 
+    def test_cli_ca_setup_needs_no_config(self):
+        import kb_cli
+        with mock.patch.object(kb_cli.store, "read_config") as read, \
+             mock.patch.object(kb_stealth, "ca_setup", return_value=0) as setup:
+            kb_cli.main(["ca-setup"])
+        setup.assert_called_once_with()
+        read.assert_not_called()
+
+    def test_ca_setup_generates_missing_ca(self):
+        out = io.StringIO()
+        with mock.patch.object(kb_stealth, "Session") as session:
+            kb_stealth.ca_setup(self.env, out, runner=mock.Mock(), platform="linux")
+        session.assert_called_once()
+        self.assertEqual(session.call_args.args[0], str(self.fake))
+
     def test_ca_setup_output(self):
         (self.dir / "ca").mkdir()
         (self.dir / "ca" / kb_stealth.CA_FILE).write_text("pem")
