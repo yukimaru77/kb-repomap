@@ -244,7 +244,7 @@ kb octane --remote codex exec --help
 既定の stealth 方式では、Codexの設定・provider・ログインは変えず、`HTTPS_PROXY` だけを渡して
 chatgpt.com への推論（WebSocket の `response.create`、HTTPの `POST /backend-api/codex/responses`）に
 KBを挿入します（[`--remote` の方式](#--remote-の方式stealth--provider)）。
-以下はフォールバックの provider 方式（`pool-rr` 併用時も）の説明です。
+以下は明示指定時の provider 方式（`pool-rr` 併用時も）の説明です。
 
 provider 方式の `--remote` は、Codexの起動中だけkbがローカルのプロキシ（`127.0.0.1` のランダムポート）を
 立て、起動するCodexプロセスだけに、そのプロキシを指す一時的なproviderを `-c` で設定します。
@@ -314,10 +314,10 @@ Codexの永続設定・環境は変更しない（子プロセスにだけ仮の
   `api.anthropic.com` だけで、それ以外のホストは中身に触れずに中継します。
   書き換えるのは Codex の `/backend-api/codex/responses`（WebSocket・HTTP）と Claude の
   `POST /v1/messages` だけです。クライアントの終了で mitmdump も止まり、終了コードはクライアントのものです。
-- **provider（フォールバック）**: 従来の loopback プロキシです。Codex は一時的な custom provider、
-  Claude は `ANTHROPIC_BASE_URL` でkbのプロキシを指します。mitmdump が見つからないときは
-  `Remote KB: provider mode (mitmdump not found; install: uv tool install mitmproxy)` と1行出してこちらで起動します。
-  既定モードで mitmdump の起動に失敗した場合も、理由を1行出してこちらに切り替えます。
+- **provider（明示指定のみ）**: 従来の loopback プロキシです。Codex は一時的な custom provider、
+  Claude は `ANTHROPIC_BASE_URL` でkbのプロキシを指すため、クライアントから見える挙動が変わります。
+  そのため**自動では使いません**。mitmdump が見つからない・起動できない場合は、導入手順
+  （`uv tool install mitmproxy && kb ca-setup`）と `KB_REMOTE_MODE=provider` の案内を出して終了します。
 
 stealth 方式でクライアント側に**変わらないもの**:
 
@@ -328,8 +328,8 @@ stealth 方式でクライアント側に**変わらないもの**:
 
 方式の選択:
 
-- `KB_REMOTE_MODE=provider` または `KB_REMOTE_MODE=stealth` で強制できます。
-  `stealth` を明示したのに mitmdump が見つからない・起動できない場合は、フォールバックせずにエラーで終了します。
+- 既定は stealth で、フォールバックはありません。`KB_REMOTE_MODE=provider` を明示したときだけ provider 方式になります。
+  mitmdump が見つからない・起動できない場合は案内を出して終了します。
 - **`pool-rr` 併用時（`KB_CODEX_CONFIG_OVERRIDES` がある Codex）は常に provider 方式**です。
   RRの入口は号池のURLを指す必要があるためです。
 - mitmdump の探索順は `KB_MITMDUMP` → `PATH` の `mitmdump` →

@@ -145,12 +145,12 @@ class LauncherTests(FakeMitmdump):
         self.assertIs(signal.getsignal(signal.SIGTERM), previous)
         self.assertIn(f"kb_parent={os.getpid()}", json.loads(self.record.read_text())["argv"])
 
-    def test_fallback_when_mitmdump_absent(self):
+    def test_missing_mitmdump_is_an_error_with_guidance(self):
+        # No silent fallback: provider mode would change what the client sees.
         env = dict(self.env, PATH="/usr/bin:/bin")
-        code, seen = self.launch("codex", env)
-        self.assertEqual(code, 9)
-        self.assertTrue(seen["provider"])
-        self.assertIn(kb_stealth.NOT_FOUND, sys.stderr.getvalue())
+        with self.assertRaisesRegex(ValueError, "uv tool install mitmproxy") as caught:
+            self.launch("codex", env)
+        self.assertIn("KB_REMOTE_MODE=provider", str(caught.exception))
 
     def test_explicit_stealth_without_mitmdump_is_an_error(self):
         with self.assertRaisesRegex(ValueError, "mitmdump"):
@@ -169,11 +169,10 @@ class LauncherTests(FakeMitmdump):
         with self.assertRaisesRegex(ValueError, "KB_REMOTE_MODE"):
             kb_stealth.select("codex", dict(self.env, KB_REMOTE_MODE="bogus"))
 
-    def test_start_failure_falls_back_by_default_and_errors_when_explicit(self):
+    def test_start_failure_is_an_error_not_a_fallback(self):
         env = dict(self.env, FAKE_MITM_FAIL="1")
-        code, seen = self.launch("codex", env)
-        self.assertTrue(seen["provider"])
-        self.assertIn("stealth proxy failed", sys.stderr.getvalue())
+        with self.assertRaisesRegex(ValueError, "kb ca-setup"):
+            self.launch("codex", env)
         with self.assertRaisesRegex(ValueError, "stealth"):
             self.launch("codex", dict(env, KB_REMOTE_MODE="stealth"))
 

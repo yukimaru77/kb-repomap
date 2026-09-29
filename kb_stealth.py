@@ -27,7 +27,9 @@ ALLOW_HOSTS = r"^(chatgpt\.com|api\.anthropic\.com):443$"
 CA_FILE = "mitmproxy-ca-cert.pem"
 READY_TIMEOUT = 10.0
 MODES = ("provider", "stealth")
-NOT_FOUND = "Remote KB: provider mode (mitmdump not found; install: uv tool install mitmproxy)"
+NOT_FOUND = ("Remote KB: mitmdump が見つかりません。--remote はクライアント設定を変えないステルス方式でのみ動作します。\n"
+             "  導入: uv tool install mitmproxy && kb ca-setup\n"
+             "  旧 provider 方式を明示的に使う場合のみ: KB_REMOTE_MODE=provider")
 TLS_HINT = "Remote KB: クライアントがkbのCAを信頼していないため通信に失敗しました。kb ca-setup を実行してください"
 
 
@@ -85,11 +87,9 @@ def select(client, env=None):
         return Selection("provider", explicit=True)
     mitmdump = find_mitmdump(env)
     if mitmdump is None:
-        if wanted == "stealth":
-            raise ValueError("KB_REMOTE_MODE=stealth ですが mitmdump が見つかりません"
-                             "（KB_MITMDUMP を指定するか uv tool install mitmproxy）")
-        notice(NOT_FOUND)
-        return Selection("provider")
+        # No silent fallback: provider mode changes what the client sees, so
+        # it must be chosen explicitly with KB_REMOTE_MODE=provider.
+        raise ValueError(NOT_FOUND)
     return Selection("stealth", mitmdump, explicit=wanted == "stealth")
 
 
@@ -206,10 +206,8 @@ def launch(client, command, payload, workspace, *, provider, describe, runner=No
     try:
         session = Session(selection.mitmdump, payload, env)
     except StealthError as error:
-        if selection.explicit:
-            raise ValueError(f"stealth 方式を開始できません: {error}") from error
-        notice(f"Remote KB: provider mode (stealth proxy failed: {error})")
-        return provider()
+        raise ValueError(f"stealth 方式を開始できません: {error}\n"
+                         "  CA/導入の確認: kb ca-setup。旧 provider 方式を明示的に使う場合のみ KB_REMOTE_MODE=provider") from error
     with session, _exit_on_termination():
         notice(f"{describe(session.port)} / stealth")
         try:
