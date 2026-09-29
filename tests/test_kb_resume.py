@@ -33,6 +33,7 @@ class Isolated(unittest.TestCase):
         self.addCleanup(directory.cleanup)
         self.bindings = Path(directory.name)
         for patcher in (mock.patch.object(proxy, "BINDINGS", self.bindings),
+                        mock.patch.dict("os.environ", {"KB_REMOTE_MODE": "provider"}),
                         mock.patch("sys.stderr", new_callable=io.StringIO)):
             patcher.start()
             self.addCleanup(patcher.stop)

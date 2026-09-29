@@ -154,6 +154,7 @@ class StartRemoteTests(unittest.TestCase):
         self.addCleanup(patcher.stop)
         environment = mock.patch.dict(kb_claude_remote.os.environ, {
             "KB_CLAUDE_UPSTREAM": upstream.url, "ANTHROPIC_BASE_URL": "https://example.invalid",
+            "KB_REMOTE_MODE": "provider",
         })
         environment.start()
         self.addCleanup(environment.stop)

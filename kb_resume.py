@@ -174,9 +174,11 @@ def resume_codex(native_args, config, *, runner=None):
             return proxy.run_client(command, dict(os.environ), workspace, runner)
         notice(f"KB: {record['name']}/{record['file']} (binding {session_id}) の最新内容を挿入して再開します")
         binder = CodexBinder(config, record, codex_items(config, record))
-    origin, key = pool_endpoint(config)
-    return kb_native.run_remote(native_args, SimpleNamespace(origin=origin, key=key), binder.items, workspace,
-                                on_request=binder.observe, runner=runner)
+    def remote():
+        origin, key = pool_endpoint(config)
+        return SimpleNamespace(origin=origin, key=key)
+
+    return kb_native.launch_remote(native_args, binder, workspace, remote, runner=runner)
 
 
 # --- Claude ---------------------------------------------------------------
@@ -226,6 +228,25 @@ class ClaudeBinder:
 
 
 def run_claude(claude_args, binder, workspace, *, session_label, runner=None):
+    """Run Claude Code in stealth mode, or through kb's base-URL proxy (provider mode)."""
+    import kb_stealth
+    size = len(binder.block["text"].encode("utf-8")) if binder.block else "lazy"
+
+    def describe(port):
+        label = session_label
+        if os.environ.get("ANTHROPIC_BASE_URL"):
+            label += (f"\nkb: ANTHROPIC_BASE_URL={os.environ['ANTHROPIC_BASE_URL']} のため、"
+                      "KBは api.anthropic.com 宛ての要求にだけ挿入されます")
+        return f"{label}\nRemote KB: proxy 127.0.0.1:{port} / {size} bytes"
+
+    payload = {"client": "claude", "record": binder.record, "block": binder.block}
+    return kb_stealth.launch("claude", ["claude", *claude_args], payload, workspace,
+                             provider=lambda: run_claude_provider(claude_args, binder, workspace,
+                                                                  session_label=session_label, runner=runner),
+                             describe=describe, runner=runner)
+
+
+def run_claude_provider(claude_args, binder, workspace, *, session_label, runner=None):
     import kb_claude_remote
     upstream = os.environ.get("KB_CLAUDE_UPSTREAM", kb_claude_remote.DEFAULT_UPSTREAM)
     with proxy.start(binder.injector, upstream, on_request=binder.observe) as running:
@@ -239,7 +260,7 @@ def run_claude(claude_args, binder, workspace, *, session_label, runner=None):
         # keep the on-demand loading the user gets without the proxy.
         env.setdefault("ENABLE_TOOL_SEARCH", "true")
         size = len(binder.block["text"].encode("utf-8")) if binder.block else "lazy"
-        notice(f"{session_label}\nRemote KB: proxy 127.0.0.1:{running.port} / {size} bytes")
+        notice(f"{session_label}\nRemote KB: proxy 127.0.0.1:{running.port} / {size} bytes / provider")
         return proxy.run_client(["claude", *claude_args], env, workspace, runner)
 
 

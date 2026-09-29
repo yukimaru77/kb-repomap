@@ -153,6 +153,7 @@ class StoreDeveloperTests(unittest.TestCase):
             stack.enter_context(mock.patch.object(kb_remote, "pool_configuration",
                                                  return_value=("http://127.0.0.1:12345/_pool/rr", "test-key")))
             # kb's own proxy receives the remote items; capture what it would insert.
+            stack.enter_context(mock.patch.dict(os.environ, {"KB_REMOTE_MODE": "provider"}))
             def start_proxy(remote, items, on_request=None):
                 bound.extend(items)
                 return mock.MagicMock(url="http://127.0.0.1:1", port=1), None

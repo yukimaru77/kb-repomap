@@ -123,8 +123,28 @@ def run_remote(native_args, remote, items, workspace, *, on_request=None, runner
         command, env = remote_command(native_args, running.url, provider)
         fixed = items if isinstance(items, list) else getattr(getattr(items, "__self__", None), "cached", None)
         count = len(fixed) if isinstance(fixed, list) else "lazy"
-        print(f"Remote KB: proxy 127.0.0.1:{running.port} / {count} items", file=sys.stderr, flush=True)
+        print(f"Remote KB: proxy 127.0.0.1:{running.port} / {count} items / provider", file=sys.stderr, flush=True)
         return proxy.run_client(command, env, workspace, runner)
+
+
+def launch_remote(native_args, binder, workspace, remote, *, runner=None):
+    """Run Codex --remote in stealth mode, or through kb's provider proxy.
+
+    `remote` returns the pool endpoint (origin, key); only provider mode needs it.
+    In stealth mode Codex keeps its own provider, login and WebSocket transport.
+    """
+    import kb_stealth
+    count = len(binder.cached) if isinstance(binder.cached, list) else "lazy"
+
+    def provider():
+        # A bound session has fixed items; a lazy resume picks them on the first request.
+        items = binder.cached if binder.resolved and isinstance(binder.cached, list) else binder.items
+        return run_remote(native_args, remote(), items, workspace, on_request=binder.observe, runner=runner)
+
+    payload = {"client": "codex", "record": binder.record, "items": binder.cached}
+    return kb_stealth.launch("codex", ["codex", *native_args], payload, workspace, provider=provider,
+                             describe=lambda port: f"Remote KB: proxy 127.0.0.1:{port} / {count} items",
+                             runner=runner)
 
 
 def run(args, config, snapshot, workspace, context, *, developer_text=None):
@@ -137,7 +157,7 @@ def run(args, config, snapshot, workspace, context, *, developer_text=None):
         # The session id is Codex's, so bind it when the first request shows it.
         from kb_resume import CodexBinder
         binder = CodexBinder(config, _record(args), remote.items)
-        return run_remote(args.native_args, remote, remote.items, workspace, on_request=binder.observe)
+        return launch_remote(args.native_args, binder, workspace, lambda: remote)
     from kb_native_local import command as local_command, seed_overrides
     # Validate the command shape before creating a persisted session.
     local_command(args.native_args, "validation-only")
@@ -169,7 +189,7 @@ def run_legacy_remote(args, config, snapshot, workspace, context, *, developer_t
                                             full_access=not args.no_yolo, prompt=args.prompt,
                                             remote=seeded, overrides=added, developer_text=developer_text)
         print(f"session: {session_id}", flush=True)
-        print(f"Remote KB: proxy 127.0.0.1:{running.port} / {len(remote.items) - 1} items", flush=True)
+        print(f"Remote KB: proxy 127.0.0.1:{running.port} / {len(remote.items) - 1} items / provider", flush=True)
         if args.session_only or args.app:
             if args.app:
                 subprocess.run(["open", f"codex://threads/{session_id}"], check=True)

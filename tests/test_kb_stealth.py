@@ -40,7 +40,9 @@ while True:
 """
 
 
-class LauncherTests(unittest.TestCase):
+class FakeMitmdump(unittest.TestCase):
+    """A fake mitmdump on PATH that records its argv and payload, and listens on -p."""
+
     def setUp(self):
         directory = tempfile.TemporaryDirectory()
         self.addCleanup(directory.cleanup)
@@ -85,6 +87,7 @@ class LauncherTests(unittest.TestCase):
             time.sleep(0.05)
         return False
 
+class LauncherTests(FakeMitmdump):
     def test_codex_child_env_and_lifetime(self):
         code, seen = self.launch("codex")
         self.assertEqual(code, 5)
@@ -192,6 +195,87 @@ class LauncherTests(unittest.TestCase):
         kb_stealth.ca_setup(dict(self.env, PATH="/usr/bin:/bin"), out, runner=runner, platform="linux")
         self.assertIn("update-ca-certificates", out.getvalue())
         self.assertIn("見つかりません", out.getvalue())
+
+
+class WiringTests(FakeMitmdump):
+    """Entry points choose stealth by default and hand the addon the right material."""
+
+    SID = "0199aaaa-bbbb-7ccc-8ddd-eeeeffff0001"
+
+    def setUp(self):
+        super().setUp()
+        environment = {key: value for key, value in os.environ.items()
+                       if key not in ("KB_REMOTE_MODE", "KB_CODEX_CONFIG_OVERRIDES", "ANTHROPIC_BASE_URL")}
+        environment.update(self.env, KB_MITMDUMP=str(self.fake))
+        patcher = mock.patch.dict(os.environ, environment, clear=True)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self.seen = {}
+
+    def runner(self, command, env, cwd):
+        self.seen.update(command=command, env=env, payload=json.loads(self.record.read_text())["payload"])
+        return mock.Mock(returncode=4)
+
+    def test_codex_resume_known_id(self):
+        import kb_resume
+        proxy.write_binding(self.SID, "codex", "octane", "pepabo", "latest.json")
+        items = [{"type": "compaction", "encrypted_content": "KB"}]
+        with mock.patch.object(kb_resume, "codex_items", return_value=items), \
+             mock.patch("kb_remote.pool_endpoint") as endpoint:
+            code = kb_resume.resume_codex(["resume", self.SID], {}, runner=self.runner)
+        self.assertEqual(code, 4)
+        endpoint.assert_not_called()
+        self.assertEqual(self.seen["command"], ["codex", "resume", self.SID])
+        self.assertEqual(self.seen["payload"]["items"], items)
+        self.assertEqual(self.seen["payload"]["record"]["name"], "octane")
+        self.assertIn("HTTPS_PROXY", self.seen["env"])
+        self.assertIn("/ 1 items / stealth", sys.stderr.getvalue())
+
+    def test_codex_resume_lazy(self):
+        import kb_resume
+        kb_resume.resume_codex(["resume", "--last"], {}, runner=self.runner)
+        self.assertEqual(self.seen["payload"], {"client": "codex", "record": None, "items": None})
+        self.assertIn("lazy items / stealth", sys.stderr.getvalue())
+
+    def test_native_new_session(self):
+        import kb_native
+        args = kb_native.parse(["example", "--remote", "codex", "exec", "hi"])
+        remote = mock.Mock(items=[{"type": "compaction"}])
+        with mock.patch.object(kb_native, "RemoteKB", return_value=remote), \
+             mock.patch.object(kb_native.proxy, "run_client",
+                               side_effect=lambda c, e, w, r=None: self.runner(c, e, w).returncode):
+            code = kb_native.run(args, {}, Path("kb.json"), self.dir, "")
+        self.assertEqual(code, 4)
+        self.assertEqual(self.seen["command"], ["codex", "exec", "hi"])
+        self.assertEqual(self.seen["payload"]["record"]["name"], "example")
+        self.assertEqual(self.seen["payload"]["items"], [{"type": "compaction"}])
+
+    def test_claude_resume_known_id(self):
+        import kb_resume
+        proxy.write_binding(self.SID, "claude", "octane", None, "latest.json")
+        block = {"type": "text", "text": "KB"}
+        with mock.patch.object(kb_resume, "claude_block", return_value=block):
+            code = kb_resume.resume_claude(["--resume", self.SID], {}, runner=self.runner)
+        self.assertEqual(code, 4)
+        self.assertEqual(self.seen["command"], ["claude", "--resume", self.SID])
+        self.assertEqual(self.seen["payload"]["block"], block)
+        self.assertNotIn("ANTHROPIC_BASE_URL", self.seen["env"])
+        self.assertNotIn("ENABLE_TOOL_SEARCH", self.seen["env"])
+        self.assertIn("NODE_EXTRA_CA_CERTS", self.seen["env"])
+        self.assertIn("bytes / stealth", sys.stderr.getvalue())
+
+    def test_claude_start_remote(self):
+        import kb_claude_remote
+        loaded = {"store": {"name": "s"}}
+        args = type("Args", (), {"name": "example", "file": "latest.json", "store": None,
+                                 "workspace": str(self.dir), "claude_args": ["-p", "hi"]})()
+        with mock.patch.object(kb_claude_remote.store, "find_kb", return_value=loaded), \
+             mock.patch.object(kb_claude_remote.kb_claude, "build_context", return_value="CTX"):
+            code = kb_claude_remote.start_remote(args, {}, runner=self.runner)
+        self.assertEqual(code, 4)
+        self.assertEqual(self.seen["command"][:2], ["claude", "--session-id"])
+        self.assertTrue(self.seen["payload"]["block"]["text"].endswith("CTX"))
+        self.assertEqual(proxy.read_binding(self.seen["command"][2], "claude")["name"], "example")
 
 
 if __name__ == "__main__":
