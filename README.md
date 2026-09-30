@@ -228,9 +228,9 @@ kb自体は固定の案内文を持ちません。KBの使い方の指示は、�
 まだ無い場合に限り、既定の内容で `dev.txt` を作成して同じcommitで保存します。
 既存の `dev.txt` は上書きしません（`publish-paper` は実行フォルダに `dev.txt` があればそれを保存します）。
 既定の内容は次の案内文です。`kb create` ではその後に空行を挟み、KBを作成したcommitの
-リポジトリ構成（`git ls-files` 相当の追跡ファイル、`.` を根に2スペースずつ字下げ、
-ディレクトリは末尾 `/`、名前順）を付けます。ファイル込みで60,000文字を超える場合は
-ディレクトリだけにし、見出しの下に `(files omitted: <N> files; directories only)` と書きます。
+リポジトリ構成（`git ls-files` 相当の追跡パス、`.` を根に2スペースずつ字下げ、
+ディレクトリは末尾 `/`、名前順）を付けます。既定はディレクトリのみです。
+`--tree-files` を付けるとファイルも含め、見出しは `## Repository structure with files (...)` になります。
 論文KB（`publish-paper`）は案内文のみです。
 
 ```text
@@ -244,7 +244,6 @@ sources and search them efficiently.
 .
   admin-ui/
     src/
-      foo.ts
   gateway/
 ```
 
@@ -254,7 +253,8 @@ sources and search them efficiently.
 
 ```bash
 kb dev-init octane
-kb dev-init octane --store research --force
+kb dev-init octane --store research --force --tree-files
+kb create octane --tree-files   # 作成時にファイルも含める
 ```
 
 `dev.txt` の内容は、圧縮済みコンテキスト（KBのblob）の**後ろ**に置きます。
