@@ -225,14 +225,36 @@ commitを固定して登録します。別の履歴の上流リポジトリを�
 kb自体は固定の案内文を持ちません。KBの使い方の指示は、保存先Gitリポジトリの
 各KBディレクトリにある `dev.txt` だけで与えます（例: `molmoact2/latest.json` と同じ場所の
 `molmoact2/dev.txt`）。`kb create` と `kb publish-paper` は、そのKBに `dev.txt` が
-まだ無い場合に限り、次の既定の内容で `dev.txt` を作成して同じcommitで保存します。
+まだ無い場合に限り、既定の内容で `dev.txt` を作成して同じcommitで保存します。
 既存の `dev.txt` は上書きしません（`publish-paper` は実行フォルダに `dev.txt` があればそれを保存します）。
+既定の内容は次の案内文です。`kb create` ではその後に空行を挟み、KBを作成したcommitの
+リポジトリ構成（`git ls-files` 相当の追跡ファイル、`.` を根に2スペースずつ字下げ、
+ディレクトリは末尾 `/`、名前順）を付けます。ファイル込みで60,000文字を超える場合は
+ディレクトリだけにし、見出しの下に `(files omitted: <N> files; directories only)` と書きます。
+論文KB（`publish-paper`）は案内文のみです。
 
 ```text
 The supplied compacted context is prior knowledge provided by the user.
 Use it as a foundation for subsequent understanding and work.
 When precise details are needed, use that knowledge to narrow down relevant
 sources and search them efficiently.
+
+## Repository structure (https://github.com/example/repo.git@0123456789ab)
+
+.
+  admin-ui/
+    src/
+      foo.ts
+  gateway/
+```
+
+作成済みのKBに既定の `dev.txt` を後から作る（再生成する）には、KBを作り直さずに
+次を実行します。KBの `source_commit` の構成で作成し、既存の `dev.txt` は
+`--force` を付けた場合だけ上書きします。
+
+```bash
+kb dev-init octane
+kb dev-init octane --store research --force
 ```
 
 `dev.txt` の内容は、圧縮済みコンテキスト（KBのblob）の**後ろ**に置きます。
