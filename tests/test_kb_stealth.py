@@ -55,7 +55,7 @@ class FakeMitmdump(unittest.TestCase):
         self.fake.chmod(self.fake.stat().st_mode | stat.S_IEXEC)
         self.record = self.dir / "record.json"
         self.env = {"PATH": f"{bin_dir}:/usr/bin:/bin", "FAKE_MITM_RECORD": str(self.record),
-                    "KB_CA_DIR": str(self.dir / "ca"), "HOME": os.environ.get("HOME", "")}
+                    "KB_CA_DIR": str(self.dir / "ca"), "HOME": str(self.dir)}
         for patcher in (mock.patch.object(proxy, "BINDINGS", self.dir / "bindings"),
                         mock.patch.object(kb_stealth, "FALLBACK_MITMDUMP", self.dir / "absent"),
                         mock.patch("sys.stderr", new_callable=io.StringIO)):
