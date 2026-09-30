@@ -190,3 +190,20 @@ class RemoteKBTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class RemoteKBWithoutPoolConfigTests(unittest.TestCase):
+    def test_items_load_without_any_pool_configuration(self):
+        import json, os, tempfile
+        from unittest import mock
+        import kb_remote
+        with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as handle:
+            json.dump([{"type": "compaction", "encrypted_content": "KB1"},
+                       {"type": "compaction", "encrypted_content": "KB2"}], handle)
+        self.addCleanup(os.unlink, handle.name)
+        clean = {k: v for k, v in os.environ.items() if not k.startswith("KB_POOL")}
+        with mock.patch.dict(os.environ, clean, clear=True):
+            remote = kb_remote.RemoteKB({"stores": []}, handle.name)
+            self.assertGreaterEqual(len(remote.items), 2)  # no pool endpoint needed for items
+            with self.assertRaises(ValueError):
+                remote.origin  # provider mode still requires the endpoint

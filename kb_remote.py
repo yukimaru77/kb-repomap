@@ -9,7 +9,7 @@ from kb_api import NoRedirect, pool_configuration
 from kb_items import load_session_items
 
 
-def pool_endpoint(config):
+def pool_endpoint(config, environ=None):
     """Return (pool origin, client key) from the environment or saved build settings."""
     parser = argparse.ArgumentParser(add_help=False, allow_abbrev=False)
     parser.add_argument("--pool-config")
@@ -17,7 +17,7 @@ def pool_endpoint(config):
     parser.add_argument("--key-file")
     parser.add_argument("--private-http", action="store_true")
     args, _ = parser.parse_known_args(config.get("build_args", []))
-    environ = dict(os.environ)
+    environ = dict(os.environ if environ is None else environ)
     if args.pool_config is not None:
         environ.setdefault("KB_POOL_CONFIG", args.pool_config)
     if args.origin:
@@ -32,10 +32,28 @@ def pool_endpoint(config):
 
 class RemoteKB:
     def __init__(self, config, jsonl, *, developer_text=None):
-        self.origin, self.key = pool_endpoint(config)
+        # The pool endpoint is only needed by provider mode (and the legacy
+        # pool-side bind). Stealth --remote never touches it, so resolve it
+        # lazily: a machine without any pool configuration can still inject.
+        self._config = config
+        self._environ = dict(os.environ)  # resolve against the launch-time environment
+        self._endpoint = None
         # Session metadata belongs to Codex. Keep developer guidance and the
         # portable memories; never import the producer's session configuration.
         self.items = load_session_items(jsonl, developer_text=developer_text)
+
+    def _resolve(self):
+        if self._endpoint is None:
+            self._endpoint = pool_endpoint(self._config, self._environ)
+        return self._endpoint
+
+    @property
+    def origin(self):
+        return self._resolve()[0]
+
+    @property
+    def key(self):
+        return self._resolve()[1]
 
     def bind(self, session_id, *, include_guidance=True):
         # Pool-side binding (/_pool/kb/bind). kb itself no longer calls this;
