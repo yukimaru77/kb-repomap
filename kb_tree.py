@@ -1,7 +1,5 @@
 """Render a repository file list as an indented `tree`-style outline."""
 
-MAX_TREE_CHARS = 60_000
-
 
 def _nest(paths):
     root = {}
@@ -30,19 +28,9 @@ def _lines(node, depth, files):
             yield from _lines(child, depth + 1, files)
 
 
-def _render(root, files):
-    return "\n".join([".", *_lines(root, 1, files)]) + "\n"
+def render_tree(paths, include_files=False):
+    """`.` then sorted entries, 2 spaces per level, directories suffixed `/`.
 
-
-def render_tree(paths, max_chars=MAX_TREE_CHARS):
-    """Tree with files if it fits in `max_chars`; otherwise directories only.
-
-    The directories-only form starts with `(files omitted: N files; directories only)`
-    and a blank line, so it can sit directly under a section heading.
+    Directories only unless `include_files`.
     """
-    root = _nest(paths)
-    full = _render(root, files=True)
-    if len(full) <= max_chars:
-        return full
-    count = sum(1 for line in _lines(root, 0, True) if not line.endswith("/"))
-    return f"(files omitted: {count} files; directories only)\n\n" + _render(root, files=False)
+    return "\n".join([".", *_lines(_nest(paths), 1, include_files)]) + "\n"

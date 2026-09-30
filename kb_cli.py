@@ -121,8 +121,8 @@ def previous_kb(config, name, selected, filename):
     return None
 
 
-def repository_developer_text(info, commit, repo=None):
-    """DEFAULT_DEVELOPER_TEXT plus the source tree (tracked files) at `commit`."""
+def repository_developer_text(info, commit, repo=None, *, include_files=False):
+    """DEFAULT_DEVELOPER_TEXT plus the source tree (tracked paths) at `commit`."""
     from kb_tree import render_tree
     if repo is None or store.git(repo, "cat-file", "-e", f"{commit}^{{commit}}", check=False).returncode:
         repo = store.cached_repo(info["repository_url"], "sources")
@@ -130,16 +130,17 @@ def repository_developer_text(info, commit, repo=None):
             store.git(repo, "fetch", "--quiet", "--no-tags", "origin", commit)
     paths = [path for path in store.git(repo, "ls-tree", "-r", "--name-only", "-z", commit).stdout.split("\0")
              if path]
-    heading = f"## Repository structure ({info['repository_url']}@{commit[:12]})"
-    return f"{DEFAULT_DEVELOPER_TEXT}\n{heading}\n\n{render_tree(paths)}"
+    title = "Repository structure with files" if include_files else "Repository structure"
+    heading = f"## {title} ({info['repository_url']}@{commit[:12]})"
+    return f"{DEFAULT_DEVELOPER_TEXT}\n{heading}\n\n{render_tree(paths, include_files)}"
 
 
-def default_developer_text(info, commit, repo=None):
+def default_developer_text(info, commit, repo=None, *, include_files=False):
     """The dev.txt written when a KB has none; guidance only if the tree is unavailable."""
     if info.get("source_kind") == "paper" or not info.get("repository_url") or not commit:
         return DEFAULT_DEVELOPER_TEXT
     try:
-        return repository_developer_text(info, commit, repo)
+        return repository_developer_text(info, commit, repo, include_files=include_files)
     except Exception as error:  # never lose a finished KB build over the tree
         print(f"リポジトリ構成を取得できないため、dev.txtは案内文のみにします: {error}",
               file=sys.stderr, flush=True)
@@ -156,14 +157,15 @@ def developer_init(args, config):
     elif not commit:
         raise ValueError(f"KBは未作成です。kb create {args.name} で作成してください")
     else:
-        text = repository_developer_text(info, commit)
+        text = repository_developer_text(info, commit, include_files=args.tree_files)
     revision = store.publish_developer(loaded["store"], args.name, text, overwrite=args.force)
     print(f"dev.txtを保存しました: {args.name}/dev.txt / store: {loaded['store']['name']} / {revision}",
           flush=True)
     return revision
 
 
-def create_kb(name, loaded, commit, config, filename="latest.json", *, previous=None, clean=False):
+def create_kb(name, loaded, commit, config, filename="latest.json", *, previous=None, clean=False,
+              tree_files=False):
     print(f"KBを作成します: {name}@{commit} / store: {loaded['store']['name']}", flush=True)
     if clean:
         print("--clean: 前回blobを再利用せず全体を作り直します。", flush=True)
@@ -180,7 +182,8 @@ def create_kb(name, loaded, commit, config, filename="latest.json", *, previous=
     else:
         info.pop("pack_manifest", None)
     # The build clone holds `commit`; the tree is only written if the store has no dev.txt.
-    developer = default_developer_text(info, commit, jsonl.parent.parent / "repos" / name)
+    developer = default_developer_text(info, commit, jsonl.parent.parent / "repos" / name,
+                                       include_files=tree_files)
     revision = store.publish(loaded["store"], name, info, jsonl, filename=filename,
                              default_developer_text=developer)
     print(f"KBを作成・保存しました: {name}/{filename} / {revision}", flush=True)
@@ -358,10 +361,13 @@ def main(argv=None):
     creation.add_argument("name", type=store.name_value)
     creation.add_argument("--store")
     creation.add_argument("--clean", action="store_true", help="前回blobを再利用せず全体を作り直す")
+    creation.add_argument("--tree-files", action="store_true",
+                          help="既定dev.txtのリポジトリ構成にファイルも含める（既定はディレクトリのみ）")
     dev_init = commands.add_parser("dev-init", help="既定のdev.txt（案内文＋作成commitのリポジトリ構成）を保存")
     dev_init.add_argument("name")
     dev_init.add_argument("--store")
     dev_init.add_argument("--force", action="store_true", help="既存のdev.txtを上書きする")
+    dev_init.add_argument("--tree-files", action="store_true", help="リポジトリ構成にファイルも含める（既定はディレクトリのみ）")
     stores = commands.add_parser("store", help="保存先Gitリポジトリを管理")
     actions = stores.add_subparsers(dest="action", required=True)
     add = actions.add_parser("add")
@@ -419,7 +425,7 @@ def main(argv=None):
             raise ValueError("論文KBはpaper-kbで作成し、--publishで保存してください")
         previous = None if args.clean else previous_kb(config, args.name, args.store, args.file)
         create_kb(args.name, loaded, store.source_head(loaded["info"]), config, args.file,
-                  previous=previous, clean=args.clean)
+                  previous=previous, clean=args.clean, tree_files=args.tree_files)
     elif args.command == "dev-init":
         developer_init(args, config)
     elif args.command == "store":

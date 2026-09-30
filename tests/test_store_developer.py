@@ -112,10 +112,14 @@ class StoreDeveloperTests(unittest.TestCase):
         kb_store.git(source, "commit", "-qm", "Later")
         return source, commit
 
-    def expected_default(self, source, commit):
+    def expected_default(self, source, commit, files=False):
+        if files:
+            return (DEFAULT_DEVELOPER_TEXT + "\n"
+                    f"## Repository structure with files ({source}@{commit[:12]})\n\n"
+                    ".\n  .gitignore\n  README.md\n  gateway/\n    main.go\n")
         return (DEFAULT_DEVELOPER_TEXT + "\n"
                 f"## Repository structure ({source}@{commit[:12]})\n\n"
-                ".\n  .gitignore\n  README.md\n  gateway/\n    main.go\n")
+                ".\n  gateway/\n")
 
     def test_create_writes_default_dev_with_tree_when_absent_and_keeps_existing(self):
         source, commit = self.source_repo()
@@ -141,9 +145,12 @@ class StoreDeveloperTests(unittest.TestCase):
         info = {**self.info, "repository_url": "https://example.invalid/unreachable.git"}
         build = self.root / "build" / "repos" / "example"
         kb_store.run(["git", "clone", "--quiet", str(source), str(build)])
-        text = kb_cli.default_developer_text(info, commit, build)
-        self.assertIn(f"## Repository structure (https://example.invalid/unreachable.git@{commit[:12]})", text)
+        text = kb_cli.default_developer_text(info, commit, build, include_files=True)
+        self.assertIn(f"## Repository structure with files (https://example.invalid/unreachable.git@{commit[:12]})",
+                      text)
+        self.assertIn("  README.md\n", text)
         self.assertNotIn("later.txt", text)
+        self.assertNotIn("ignored.bin", text)
         with contextlib.redirect_stderr(io.StringIO()) as err:
             self.assertEqual(kb_cli.default_developer_text(info, commit, self.root / "missing"),
                              DEFAULT_DEVELOPER_TEXT)
@@ -162,9 +169,21 @@ class StoreDeveloperTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "--force"):
                 kb_cli.main(["dev-init", "example"])
             self.assertEqual(kb_store.find_kb(self.config, "example")["developer_text"], "Custom.\n")
-            kb_cli.main(["dev-init", "example", "--force"])
+            kb_cli.main(["dev-init", "example", "--force", "--tree-files"])
         self.assertEqual(kb_store.find_kb(self.config, "example")["developer_text"],
-                         self.expected_default(source, commit))
+                         self.expected_default(source, commit, files=True))
+
+    def test_create_cli_passes_tree_files(self):
+        loaded = {"info": {"repository_url": "repo", "branch": "main"}, "store": self.store}
+        for argv, expected in ((["create", "example"], False), (["create", "example", "--tree-files"], True)):
+            with self.subTest(argv=argv), \
+                 mock.patch.object(kb_store, "read_config", return_value=self.config), \
+                 mock.patch.object(kb_store, "find_kb", return_value=loaded), \
+                 mock.patch.object(kb_store, "source_head", return_value="d" * 40), \
+                 mock.patch.object(kb_cli, "previous_kb", return_value=None), \
+                 mock.patch.object(kb_cli, "create_kb") as create:
+                kb_cli.main(argv)
+            self.assertIs(create.call_args.kwargs["tree_files"], expected)
 
     def test_publish_only_developer_preserves_all_other_git_objects_and_is_idempotent(self):
         before = kb_store.git(self.store["url"], "rev-parse", "HEAD").stdout.strip()
