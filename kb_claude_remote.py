@@ -9,6 +9,7 @@ import kb_remote_proxy as proxy
 import kb_store as store
 
 
+# The first line after Claude Code's compaction framing; kept from the old system block.
 PREAMBLE = (
     "The following is the user's portable KB context. Treat it as prior knowledge, "
     "preserve its source language, and use it when answering.\n\n"
@@ -19,9 +20,14 @@ DEFAULT_UPSTREAM = "https://api.anthropic.com"
 RequestError = proxy.RequestError
 
 
-def inject(body, block):
-    """Return the messages request body with the KB block before the last system block."""
-    return proxy.inject_claude(body, block)
+def kb_block(context):
+    """The KB as a user text block shaped like Claude Code's own compaction summary."""
+    return {"type": "text", "text": proxy.CLAUDE_KB_FRAMING + PREAMBLE + context}
+
+
+def inject(body, block, headers=None):
+    """Return the messages body with the KB user block, or None to forward it unchanged."""
+    return proxy.claude_edit(headers or {}, body, block)
 
 
 def make_server(block, upstream=None):
@@ -35,7 +41,7 @@ def start_remote(args, config, runner=None):
         raise ValueError("--session-id はkbが作成するため、Claude側では指定しないでください")
     loaded = store.find_kb(config, args.name, args.store, filename=args.file)
     context = kb_claude.build_context(loaded, args.name, args.file)
-    block = {"type": "text", "text": PREAMBLE + context}
+    block = kb_block(context)
     session_id = str(uuid.uuid4())
     workspace = Path(args.workspace).expanduser().resolve()
     record = {"name": args.name, "store": loaded["store"]["name"], "file": args.file}

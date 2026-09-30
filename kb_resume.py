@@ -81,9 +81,9 @@ def codex_items(config, record):
 
 def claude_block(config, record):
     import kb_claude
-    from kb_claude_remote import PREAMBLE
+    from kb_claude_remote import kb_block
     loaded = _loaded(config, record)
-    return {"type": "text", "text": PREAMBLE + kb_claude.build_context(loaded, record["name"], record["file"])}
+    return kb_block(kb_claude.build_context(loaded, record["name"], record["file"]))
 
 
 # --- Codex ----------------------------------------------------------------
@@ -224,7 +224,7 @@ class ClaudeBinder:
     def injector(self, method, path, headers, body):
         if not proxy.is_claude_messages(method, path) or self.block is None:
             return None
-        return proxy.inject_claude(proxy.decoded(headers, body), self.block)
+        return proxy.claude_edit(headers, proxy.decoded(headers, body), self.block)
 
 
 def run_claude(claude_args, binder, workspace, *, session_label, runner=None):

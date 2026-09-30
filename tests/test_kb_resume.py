@@ -134,6 +134,9 @@ class CodexBindingTests(Isolated):
         self.assertIsNone(proxy.read_binding(OTHER))
 
 
+PROMPT = {"role": "user", "content": "q"}
+
+
 class ClaudeResumeTests(Isolated):
     def run_claude(self, claude_args, body):
         seen = {}
@@ -151,10 +154,11 @@ class ClaudeResumeTests(Isolated):
 
     def test_known_id_injects(self):
         proxy.write_binding(SID, "claude", "octane", None, "latest.json")
-        _code, seen = self.run_claude(["--resume", SID, "-p", "hi"], {"system": "s"})
+        _code, seen = self.run_claude(["--resume", SID, "-p", "hi"], {"system": "s", "messages": [PROMPT]})
         self.assertEqual(seen["command"], ["claude", "--resume", SID, "-p", "hi"])
-        self.assertEqual(json.loads(self.upstream.requests[0]["body"])["system"],
-                         [BLOCK, {"type": "text", "text": "s"}])
+        sent = json.loads(self.upstream.requests[0]["body"])
+        self.assertEqual(sent["system"], "s")
+        self.assertEqual(sent["messages"][0]["content"], [BLOCK, {"type": "text", "text": "q"}])
 
     def test_unknown_id_launches_plain_claude(self):
         with mock.patch.dict("os.environ", {"ANTHROPIC_BASE_URL": ""}):
@@ -166,12 +170,14 @@ class ClaudeResumeTests(Isolated):
     def test_continue_resolves_binding_from_request_metadata(self):
         proxy.write_binding(SID, "claude", "octane", None, "latest.json")
         user_id = json.dumps({"device_id": "d", "session_id": SID})
-        self.run_claude(["--continue", "-p", "hi"], {"system": "s", "metadata": {"user_id": user_id}})
-        self.assertEqual(json.loads(self.upstream.requests[0]["body"])["system"][0], BLOCK)
+        self.run_claude(["--continue", "-p", "hi"],
+                        {"system": "s", "messages": [PROMPT], "metadata": {"user_id": user_id}})
+        self.assertEqual(json.loads(self.upstream.requests[0]["body"])["messages"][0]["content"][0], BLOCK)
 
     def test_continue_unknown_session_is_not_injected(self):
-        self.run_claude(["-c"], {"system": "s", "metadata": {"user_id": f"user_x_account_y_session_{OTHER}"}})
-        self.assertEqual(json.loads(self.upstream.requests[0]["body"])["system"], "s")
+        self.run_claude(["-c"], {"system": "s", "messages": [PROMPT],
+                                 "metadata": {"user_id": f"user_x_account_y_session_{OTHER}"}})
+        self.assertEqual(json.loads(self.upstream.requests[0]["body"])["messages"], [PROMPT])
 
 
 if __name__ == "__main__":

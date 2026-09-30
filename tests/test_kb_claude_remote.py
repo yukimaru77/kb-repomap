@@ -72,6 +72,12 @@ class ProxyTests(unittest.TestCase):
         self.addCleanup(self.proxy.server_close)
         self.addCleanup(self.proxy.shutdown)
         self.base = f"http://127.0.0.1:{self.proxy.server_address[1]}"
+        self.logs = tempfile.TemporaryDirectory()
+        self.addCleanup(self.logs.cleanup)
+        patcher = mock.patch.object(kb_claude_remote.proxy, "BINDINGS", Path(self.logs.name))
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        kb_claude_remote.proxy._CLAUDE_LOGGED.clear()
 
     def post(self, path, body, headers=None):
         request = urllib.request.Request(self.base + path, data=body, method="POST", headers={
@@ -87,23 +93,37 @@ class ProxyTests(unittest.TestCase):
         self.assertEqual(int(request["headers"]["Content-Length"]), len(request["body"]))
         return request, json.loads(request["body"])
 
-    def test_list_system_gets_kb_before_last_block(self):
+    def test_kb_goes_into_first_user_message_and_system_is_untouched(self):
         system = [{"type": "text", "text": "billing"},
                   {"type": "text", "text": "main", "cache_control": {"type": "ephemeral"}}]
-        self.post("/v1/messages?beta=true", json.dumps({"system": system, "stream": True}).encode())
+        reminder = {"type": "text", "text": "<system-reminder>r</system-reminder>"}
+        messages = [{"role": "user", "content": [reminder, {"type": "text", "text": "q"}]}]
+        self.post("/v1/messages?beta=true",
+                  json.dumps({"system": system, "messages": messages, "stream": True}).encode())
         request, payload = self.sent()
-        self.assertEqual(payload["system"], [system[0], BLOCK, system[1]])
+        self.assertEqual(payload["system"], system)
+        self.assertEqual(payload["messages"][0]["content"], [reminder, BLOCK, {"type": "text", "text": "q"}])
         self.assertEqual(request["path"], "/v1/messages?beta=true")
 
-    def test_string_system_is_normalised(self):
-        self.post("/v1/messages", json.dumps({"system": "hello"}).encode())
+    def test_string_content_is_normalised(self):
+        self.post("/v1/messages", json.dumps({"system": "hello", "messages": [
+            {"role": "user", "content": "hi"}]}).encode())
         _request, payload = self.sent()
-        self.assertEqual(payload["system"], [BLOCK, {"type": "text", "text": "hello"}])
+        self.assertEqual(payload["system"], "hello")
+        self.assertEqual(payload["messages"][0]["content"], [BLOCK, {"type": "text", "text": "hi"}])
 
-    def test_missing_system_is_appended(self):
-        self.post("/v1/messages", json.dumps({"messages": []}).encode())
-        _request, payload = self.sent()
-        self.assertEqual(payload["system"], [BLOCK])
+    def test_request_without_user_message_is_forwarded_byte_for_byte(self):
+        body = b'{ "system" : "x",\n "messages":[] }'
+        self.post("/v1/messages", body)
+        self.assertEqual(self.upstream.requests[0]["body"], body)
+
+    def test_compaction_request_is_forwarded_byte_for_byte(self):
+        body = json.dumps({"messages": [
+            {"role": "user", "content": "hi"}, {"role": "assistant", "content": "a"},
+            {"role": "user", "content": kb_claude_remote.proxy.CLAUDE_COMPACTION_ANCHOR + "."}]}).encode()
+        self.post("/v1/messages?beta=true", body)
+        self.assertEqual(self.upstream.requests[0]["body"], body)
+        self.assertIn("compaction request, KB not injected", (Path(self.logs.name) / "proxy.log").read_text())
 
     def test_auth_headers_reach_upstream_unchanged(self):
         self.post("/v1/messages", b"{}")
@@ -123,11 +143,11 @@ class ProxyTests(unittest.TestCase):
         self.assertEqual((status, data), (200, SSE))
 
     def test_gzip_request_is_decoded_and_edited(self):
-        body = gzip.compress(json.dumps({"system": [{"type": "text", "text": "a"}]}).encode())
+        body = gzip.compress(json.dumps({"messages": [{"role": "user", "content": "a"}]}).encode())
         self.post("/v1/messages", body, {"Content-Encoding": "gzip"})
         request, payload = self.sent()
         self.assertNotIn("Content-Encoding", request["headers"])
-        self.assertEqual(payload["system"], [BLOCK, {"type": "text", "text": "a"}])
+        self.assertEqual(payload["messages"][0]["content"], [BLOCK, {"type": "text", "text": "a"}])
 
     def test_invalid_json_is_rejected_locally(self):
         with self.assertRaises(urllib.error.HTTPError) as caught:
@@ -135,7 +155,7 @@ class ProxyTests(unittest.TestCase):
         caught.exception.close()
         self.assertEqual(caught.exception.code, 400)
         with self.assertRaises(urllib.error.HTTPError) as caught:
-            self.post("/v1/messages", b'{"system": 3}')
+            self.post("/v1/messages", b'{"messages": [{"role": "user", "content": 3}]}')
         caught.exception.close()
         self.assertEqual(caught.exception.code, 400)
         self.assertEqual(self.upstream.requests, [])
@@ -167,7 +187,8 @@ class StartRemoteTests(unittest.TestCase):
         def runner(command, env, cwd):
             seen.update(command=command, env=env, cwd=cwd)
             request = urllib.request.Request(env["ANTHROPIC_BASE_URL"] + "/v1/messages?beta=true",
-                                              data=b'{"system": "s"}', method="POST")
+                                              data=b'{"system": "s", "messages": [{"role": "user", "content": "q"}]}',
+                                              method="POST")
             with urllib.request.urlopen(request, timeout=10) as response:
                 response.read()
             return type("Done", (), {"returncode": 7})()
@@ -183,7 +204,10 @@ class StartRemoteTests(unittest.TestCase):
         # schema unless tool search is explicitly enabled.
         self.assertEqual(seen["env"]["ENABLE_TOOL_SEARCH"], "true")
         self.assertEqual(seen["cwd"], str(self.root.resolve()))
-        injected = json.loads(upstream.requests[0]["body"])["system"][0]["text"]
+        sent = json.loads(upstream.requests[0]["body"])
+        self.assertEqual(sent["system"], "s")
+        injected = sent["messages"][0]["content"][0]["text"]
+        self.assertTrue(injected.startswith(kb_claude_remote.proxy.CLAUDE_KB_FRAMING))
         self.assertIn("復号された知識", injected)
         self.assertIn("記録の場所", injected)
         output = "".join(call.args[0] for call in stderr.write.call_args_list)

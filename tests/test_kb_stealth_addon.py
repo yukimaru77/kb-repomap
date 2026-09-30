@@ -180,13 +180,29 @@ class AddonTests(unittest.TestCase):
 
     # --- Claude ----------------------------------------------------------
 
-    def test_claude_messages_injected_and_session_bound(self):
+    def test_claude_messages_injected_as_user_block_and_session_bound(self):
         addon = self.claude()
+        reminder = {"type": "text", "text": "<system-reminder>r</system-reminder>"}
+        body = json.dumps({"system": "s", "messages": [{"role": "user", "content": [
+            reminder, {"type": "text", "text": "q"}]}]}).encode()
         flow = self.http_flow(addon, request("api.anthropic.com", "POST", "/v1/messages?beta=true",
-                                             b'{"system":"s"}', (("x-claude-code-session-id", SID),)))
-        system = json.loads(flow.request.content)["system"]
-        self.assertEqual(system, [BLOCK, {"type": "text", "text": "s"}])
+                                             body, (("x-claude-code-session-id", SID),)))
+        sent = json.loads(flow.request.content)
+        self.assertEqual(sent["system"], "s")
+        self.assertEqual(sent["messages"][0]["content"], [reminder, BLOCK, {"type": "text", "text": "q"}])
         self.assertEqual(proxy.read_binding(SID, "claude")["name"], "octane")
+
+    def test_claude_compaction_request_is_forwarded_unchanged(self):
+        addon = self.claude()
+        proxy._CLAUDE_LOGGED.clear()
+        body = json.dumps({"messages": [{"role": "user", "content": "q"}, {"role": "assistant", "content": "a"},
+                                        {"role": "user", "content": proxy.CLAUDE_COMPACTION_ANCHOR + "."}]}).encode()
+        flow = self.http_flow(addon, request("api.anthropic.com", "POST", "/v1/messages?beta=true",
+                                             body, (("x-claude-code-session-id", SID),)))
+        self.assertEqual(flow.request.content, body)
+        log = (self.bindings / "proxy.log").read_text()
+        self.assertIn("stealth: compaction request, KB not injected", log)
+        self.assertNotIn("KB injected", log)
 
     def test_claude_session_leaves_other_requests_alone(self):
         addon = self.claude()
