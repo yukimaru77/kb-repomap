@@ -95,21 +95,76 @@ class StoreDeveloperTests(unittest.TestCase):
         self.assertEqual(loaded["developer_text"], "Custom notes.\n")
         self.assertEqual(json.loads(loaded["jsonl"].read_text())[0]["encrypted_content"], "newer-opaque")
 
-    def test_create_writes_default_dev_when_absent_and_keeps_existing(self):
+    def source_repo(self):
+        source = self.root / "source"
+        kb_store.run(["git", "init", "-q", "-b", "main", str(source)])
+        (source / "gateway").mkdir()
+        (source / "gateway" / "main.go").write_text("package main\n")
+        (source / "README.md").write_text("readme\n")
+        (source / ".gitignore").write_text("build/\n")
+        (source / "build").mkdir()
+        (source / "build" / "ignored.bin").write_text("x")
+        kb_store.git(source, "add", ".")
+        kb_store.git(source, "commit", "-qm", "Initial")
+        commit = kb_store.git(source, "rev-parse", "HEAD").stdout.strip()
+        (source / "later.txt").write_text("after the KB commit\n")
+        kb_store.git(source, "add", ".")
+        kb_store.git(source, "commit", "-qm", "Later")
+        return source, commit
+
+    def expected_default(self, source, commit):
+        return (DEFAULT_DEVELOPER_TEXT + "\n"
+                f"## Repository structure ({source}@{commit[:12]})\n\n"
+                ".\n  .gitignore\n  README.md\n  gateway/\n    main.go\n")
+
+    def test_create_writes_default_dev_with_tree_when_absent_and_keeps_existing(self):
+        source, commit = self.source_repo()
         loaded = kb_store.find_kb(self.config, "example")
+        loaded = {**loaded, "info": {**loaded["info"], "repository_url": str(source)}}
         self.assertIsNone(loaded["developer_text"])
-        rebuilt = self.root / "rebuilt" / "latest.json"
-        rebuilt.parent.mkdir()
+        rebuilt = self.root / "rebuilt" / "example" / "kb.json"
+        rebuilt.parent.mkdir(parents=True)
         dump_items(rebuilt, self.blobs)
         with mock.patch.object(kb_cli, "rebuild", return_value=rebuilt), \
              contextlib.redirect_stdout(io.StringIO()):
-            kb_cli.create_kb("example", loaded, "b" * 40, self.config)
-            self.assertEqual(kb_store.find_kb(self.config, "example")["developer_text"], DEFAULT_DEVELOPER_TEXT)
+            kb_cli.create_kb("example", loaded, commit, self.config)
+            self.assertEqual(kb_store.find_kb(self.config, "example")["developer_text"],
+                             self.expected_default(source, commit))
             self.set_developer("Keep this.\n")
-            kb_cli.create_kb("example", kb_store.find_kb(self.config, "example"), "c" * 40, self.config)
+            kb_cli.create_kb("example", {**kb_store.find_kb(self.config, "example"), "info": loaded["info"]},
+                             commit, self.config)
         after = kb_store.find_kb(self.config, "example")
         self.assertEqual(after["developer_text"], "Keep this.\n")
-        self.assertEqual(after["info"]["source_commit"], "c" * 40)
+
+    def test_create_uses_the_build_clone_and_falls_back_to_guidance_only(self):
+        source, commit = self.source_repo()
+        info = {**self.info, "repository_url": "https://example.invalid/unreachable.git"}
+        build = self.root / "build" / "repos" / "example"
+        kb_store.run(["git", "clone", "--quiet", str(source), str(build)])
+        text = kb_cli.default_developer_text(info, commit, build)
+        self.assertIn(f"## Repository structure (https://example.invalid/unreachable.git@{commit[:12]})", text)
+        self.assertNotIn("later.txt", text)
+        with contextlib.redirect_stderr(io.StringIO()) as err:
+            self.assertEqual(kb_cli.default_developer_text(info, commit, self.root / "missing"),
+                             DEFAULT_DEVELOPER_TEXT)
+        self.assertIn("案内文のみ", err.getvalue())
+
+    def test_dev_init_publishes_tree_at_source_commit_and_needs_force_to_overwrite(self):
+        source, commit = self.source_repo()
+        info = {**self.info, "repository_url": str(source), "source_commit": commit}
+        kb_store.publish(self.store, "example", info, self.snapshot)
+        with mock.patch.object(kb_store, "read_config", return_value=self.config), \
+             contextlib.redirect_stdout(io.StringIO()):
+            kb_cli.main(["dev-init", "example"])
+            self.assertEqual(kb_store.find_kb(self.config, "example")["developer_text"],
+                             self.expected_default(source, commit))
+            self.set_developer("Custom.\n")
+            with self.assertRaisesRegex(ValueError, "--force"):
+                kb_cli.main(["dev-init", "example"])
+            self.assertEqual(kb_store.find_kb(self.config, "example")["developer_text"], "Custom.\n")
+            kb_cli.main(["dev-init", "example", "--force"])
+        self.assertEqual(kb_store.find_kb(self.config, "example")["developer_text"],
+                         self.expected_default(source, commit))
 
     def test_publish_only_developer_preserves_all_other_git_objects_and_is_idempotent(self):
         before = kb_store.git(self.store["url"], "rev-parse", "HEAD").stdout.strip()

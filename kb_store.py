@@ -229,8 +229,11 @@ def publish(store, name, info, jsonl=None, *, create_only=False, filename="lates
         return git(repo, "rev-parse", "HEAD").stdout.strip()
 
 
-def publish_developer(store, name, text):
-    """Update only the store-owned developer text of an already registered KB."""
+def publish_developer(store, name, text, *, overwrite=True):
+    """Update only the store-owned developer text of an already registered KB.
+
+    With overwrite=False an existing dev.txt (checked in the fresh clone) is an error.
+    """
     name_value(name)
     validate_developer_text(text)
     branch = store.get("branch") or default_branch(store["url"])
@@ -241,6 +244,9 @@ def publish_developer(store, name, text):
         directory = repo / name
         if not (directory / "info.json").is_file():
             raise ValueError(f"KBは未登録です: {name} / store: {store['name']}")
+        if not overwrite and (directory / "dev.txt").exists():
+            raise ValueError(f"dev.txtは既にあります: {name}/dev.txt / store: {store['name']}。"
+                             "上書きする場合は --force を指定してください")
         (directory / "dev.txt").write_text(text, encoding="utf-8")
         git(repo, "add", "--", f"{name}/dev.txt")
         if git(repo, "diff", "--cached", "--quiet", check=False).returncode == 0:
