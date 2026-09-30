@@ -128,6 +128,14 @@ kb octane --file v1.00 claude --permission-mode bypassPermissions
 `decrypt` の成果物がない場合は、先に `kb decrypt octane` を実行してください。
 再作成を選んだ場合は同じファイル名を更新します。
 
+再開も kb 経由で行います。`--append-system-prompt` はプロセスごとの指定なので、
+素の `claude --resume ID` では会話は戻っても KB は付きません。
+
+```bash
+kb octane claude --resume <セッションID>   # KB を付け直して再開
+kb octane claude --continue
+```
+
 ### `--remote` でリクエストごとにKBを挿入する
 
 `--remote` を付けると、KBを起動引数に載せず、kbが起動中だけローカルのプロキシ

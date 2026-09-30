@@ -84,3 +84,18 @@ class ClaudeContextTests(unittest.TestCase):
         self.assertIn("--append-system-prompt", command)
         self.assertIn("復号された知識", " ".join(command))
         self.assertIn("--model", command)
+
+    def test_resume_reattaches_the_kb_without_a_new_session_id(self):
+        for resume in (["--resume", "11111111-2222-4333-8444-555555555555"], ["-r", "x"], ["--continue"], ["-c"]):
+            args = type("Args", (), {
+                "name": "example", "file": "latest.json", "store": "test",
+                "workspace": str(self.root), "claude_args": [*resume, "-p", "hi"],
+            })()
+            with mock.patch.object(kb_claude.os, "execvp", side_effect=SystemExit) as execvp, \
+                 mock.patch.object(kb_claude.os, "chdir"), \
+                 self.assertRaises(SystemExit):
+                kb_claude.start(args, {"stores": [self.loaded["store"]]})
+            command = execvp.call_args.args[1]
+            self.assertNotIn("--session-id", command)  # Claude Code rejects it with --resume/--continue
+            self.assertEqual(command[1], "--append-system-prompt")
+            self.assertEqual(command[3:], [*resume, "-p", "hi"])

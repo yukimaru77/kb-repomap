@@ -62,8 +62,18 @@ def start(args, config):
             f"treat it as prior knowledge: {context_path}"
         )
     workspace = Path(args.workspace).expanduser().resolve()
-    command = ["claude", "--session-id", session_id, "--append-system-prompt", prompt, *args.claude_args]
-    print(f"KB: {args.name}/{args.file} / Claude session: {session_id}", flush=True)
+    from kb_resume import claude_resume_id
+    resuming, resumed_id = claude_resume_id(args.claude_args)
+    if resuming:
+        # Claude Code rejects --session-id together with --resume/--continue.
+        # The appended system prompt is per process, so passing it again is
+        # what re-attaches the KB to the resumed conversation.
+        command = ["claude", "--append-system-prompt", prompt, *args.claude_args]
+        label = resumed_id or "resume"
+    else:
+        command = ["claude", "--session-id", session_id, "--append-system-prompt", prompt, *args.claude_args]
+        label = session_id
+    print(f"KB: {args.name}/{args.file} / Claude session: {label}", flush=True)
     if context_path:
         print(f"KB context file: {context_path}", flush=True)
     os.chdir(workspace)
