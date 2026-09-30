@@ -44,6 +44,7 @@ class StealthKB:
         self.conversations = {}
         self.watcher = None
         self.injected = False
+        self.seen_hosts = set()
 
     def load(self, loader):
         loader.add_option("kb_payload", str, "", "JSON file with the KB material kb prepared")
@@ -126,9 +127,24 @@ class StealthKB:
         compaction = self.proxy.is_codex_compaction(payload, identity)
         return conversation.transform(payload, self.codex.items(headers, payload), compaction=compaction)
 
+    # --- diagnostics -----------------------------------------------------
+
+    def _seen(self, host, how):
+        """Log each destination the client reaches through the proxy once."""
+        if host and host not in self.seen_hosts:
+            self.seen_hosts.add(host)
+            self._log(f"stealth: {self.client} connected to {host} ({how})")
+
+    def http_connect(self, flow: http.HTTPFlow):
+        # Fires for every CONNECT, including hosts outside allow_hosts that are
+        # tunnelled without inspection, so a client talking to an unexpected
+        # API host (proxy, gateway, other region) shows up in proxy.log.
+        self._seen(f"{flow.request.host}:{flow.request.port}", "CONNECT")
+
     # --- HTTP ------------------------------------------------------------
 
     def requestheaders(self, flow: http.HTTPFlow):
+        self._seen(f"{flow.request.pretty_host}:{flow.request.port}", "HTTP")
         # Only the edited requests need their whole body; stream everything else.
         target = (self._is_codex(flow) and flow.request.method == "POST") or self._is_claude(flow)
         if not target:
