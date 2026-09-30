@@ -21,9 +21,32 @@ if ! command -v uv >/dev/null 2>&1; then
   command -v uv >/dev/null 2>&1 || die "uv の導入後も uv が見つかりません。シェルを開き直して再実行してください"
 fi
 
+# Run uv; if the user's own uv.toml cannot be parsed (e.g. an option written
+# for another uv version), retry once ignoring user-level config only.
+# --no-config is not used because it would also skip this project's [tool.uv].
+uv_safe() {
+  local log status
+  log="$(mktemp)"
+  set +e
+  uv "$@" 2>"$log"
+  status=$?
+  set -e
+  cat "$log" >&2
+  if [ "$status" -ne 0 ] && grep -q "Failed to parse" "$log" && grep -q "uv.toml" "$log"; then
+    say "あなたの uv.toml を読めなかったため、ユーザー設定を無視して再実行します（uv.toml 自体は変更しません）"
+    local empty
+    empty="$(mktemp)"
+    UV_CONFIG_FILE="$empty" uv "$@"
+    status=$?
+    rm -f "$empty"
+  fi
+  rm -f "$log"
+  return "$status"
+}
+
 command -v npm >/dev/null 2>&1 || die "npm が見つかりません（KB作成に使う repomix 用）。Node.js を導入してから再実行してください: https://nodejs.org/"
 
-uv sync --locked --project "$source_dir"
+uv_safe sync --locked --project "$source_dir"
 npm ci --prefix "$source_dir" --ignore-scripts
 
 # --remote (stealth mode) runs a per-session mitmdump.
@@ -32,7 +55,7 @@ if ! command -v mitmdump >/dev/null 2>&1; then
     say "mitmdump が見つかりません（--remote に必要）。導入: uv tool install mitmproxy"
   else
     say "mitmproxy を導入します（--remote に必要）"
-    uv tool install mitmproxy
+    uv_safe tool install mitmproxy
   fi
 fi
 
