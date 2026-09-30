@@ -116,8 +116,8 @@ kb list
 
 ## Claude Codeで復号済みKBを開く
 
-復号済みのKBをClaude Codeへ渡す場合は、保存先の `dev.txt` と
-`decrypt/<ファイル名>/` 配下の選択済み `raw.txt` を初期システムコンテキストにして、
+復号済みのKBをClaude Codeへ渡す場合は、`decrypt/<ファイル名>/` 配下の選択済み `raw.txt`
+とその後ろに保存先の `dev.txt` を置いたものを初期システムコンテキストにして、
 新しいローカルClaudeセッションを起動します。号池は使用しません。
 
 ```bash
@@ -222,21 +222,33 @@ commitを固定して登録します。別の履歴の上流リポジトリを�
 `codex` より後はCodex自身が解釈します。KB用の `--remote`・`--store`・`--file`・
 `--rebuild` は `codex` より前に置きます。
 
-通常起動・`--remote` ともに、次の英語の案内を `role: developer` で渡します。
-保存済みの暗号化blobは変更せず、旧「KB憲章」は起動時にこの案内へ置き換えます。
-新構文のRemote KBでは案内もプロキシが挿入し、旧構文ではセッション側へ一度だけ挿入します。
-KBの準備だけでは user メッセージや推論を自動で開始しません。
-新構文の依頼文・標準入力はCodex自身へ渡し、旧構文は明示した `--prompt` だけを実行します。
+kb自体は固定の案内文を持ちません。KBの使い方の指示は、保存先Gitリポジトリの
+各KBディレクトリにある `dev.txt` だけで与えます（例: `molmoact2/latest.json` と同じ場所の
+`molmoact2/dev.txt`）。`kb create` と `kb publish-paper` は、そのKBに `dev.txt` が
+まだ無い場合に限り、次の既定の内容で `dev.txt` を作成して同じcommitで保存します。
+既存の `dev.txt` は上書きしません（`publish-paper` は実行フォルダに `dev.txt` があればそれを保存します）。
 
-> The supplied compacted context is prior knowledge provided by the user. Use it as a foundation for subsequent understanding and work. When precise details are needed, use that knowledge to narrow down relevant sources and search them efficiently.
+```text
+The supplied compacted context is prior knowledge provided by the user.
+Use it as a foundation for subsequent understanding and work.
+When precise details are needed, use that knowledge to narrow down relevant
+sources and search them efficiently.
+```
 
-保存先Gitリポジトリの各KBディレクトリに `dev.txt` を置くと、その内容も追加の
-`role: developer` メッセージとして渡します。例えば `molmoact2/latest.json` と
-同じ場所の `molmoact2/dev.txt` に、`./paper/paper.md (Full paper text in Markdown)`
-のような資料のパスと一言の説明を英語で記述できます。
+`dev.txt` の内容は、圧縮済みコンテキスト（KBのblob）の**後ろ**に置きます。
+Codexでは全blobの後に `role: developer` メッセージ1件として、Claudeでは全ての
+`## Decrypted KB material:` の後に `## KB developer notes` 節として渡します。
+`dev.txt` が無い・空の場合は何も追加しません。挙動を変えたいときは保存先の
+`dev.txt` を編集してpushしてください。資料のパスと一言の説明
+（例: `./paper/paper.md (Full paper text in Markdown)`）を英語で追記するのも有効です。
 `dev.txt` はUTF-8のプレーンテキストで、同じKBフォルダ内の全バージョンに共通です。
 KBと同じ保存先commitから取得し、元資料のリポジトリや現在の作業ディレクトリにある
-`dev.txt` は自動では読みません。ファイルがない場合や空の場合は従来どおりです。
+`dev.txt` は自動では読みません。保存済みの暗号化blobは変更せず、旧「KB憲章」は
+起動時に取り除きます。
+新構文のRemote KBでは `dev.txt` もプロキシが挿入し、旧構文でもセッション側には
+KBの項目を保存せず、プロキシが全項目を挿入します。
+KBの準備だけでは user メッセージや推論を自動で開始しません。
+新構文の依頼文・標準入力はCodex自身へ渡し、旧構文は明示した `--prompt` だけを実行します。
 
 新旧の起動構文・TUI・`exec`・`--app`・`--remote`・`pool-rr` で共通です。
 ローカル方式ではセッションへ挿入し、Remote方式ではkbのプロキシが各推論へ挿入します。
