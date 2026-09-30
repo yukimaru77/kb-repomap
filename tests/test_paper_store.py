@@ -7,7 +7,7 @@ from unittest import mock
 import test_kb_cli
 import kb_cli
 import kb_store
-from kb_items import load_items
+from kb_items import DEFAULT_DEVELOPER_TEXT, load_items
 
 
 class PaperStoreTest(unittest.TestCase):
@@ -75,6 +75,13 @@ class PaperStoreTest(unittest.TestCase):
         with mock.patch.object(kb_store, "publish") as publish, self.assertRaisesRegex(ValueError, "blob数"):
             kb_cli.main(["publish-paper", "paper", "--run", str(run), "--store", "second"])
         publish.assert_not_called()
+
+    def test_paper_publish_without_any_dev_writes_default(self):
+        run = self.fixture()
+        with contextlib.redirect_stdout(io.StringIO()):
+            kb_cli.main(["publish-paper", "paper", "--run", str(run), "--store", "second"])
+        self.assertEqual(kb_store.find_kb(self.config, "paper", "second")["developer_text"],
+                         DEFAULT_DEVELOPER_TEXT)
 
     def test_named_paper_leaves_latest_unbuilt(self):
         run = self.fixture()

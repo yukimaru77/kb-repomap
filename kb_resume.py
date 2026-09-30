@@ -65,7 +65,9 @@ def codex_items(config, record):
     developer = loaded.get("developer_text")
     remote = RemoteKB(config, loaded["jsonl"],
                       developer_text=developer if developer and developer.strip() else None)
-    items = remote.items[1:] if record.get("local_guidance") else remote.items
+    # Old bindings may carry `local_guidance` (their thread persisted the former
+    # hard-coded guidance). The items no longer contain it, so inject all of them.
+    items = remote.items
     info = loaded["info"]
     if info.get("source_kind") != "paper" and info.get("repository_url") and info.get("source_commit"):
         try:
@@ -129,7 +131,7 @@ class CodexBinder:
                 try:
                     written = proxy.write_binding(
                         session_id, "codex", self.record["name"], self.record.get("store"), self.record["file"],
-                        source=source, overwrite=False, local_guidance=self.record.get("local_guidance", False))
+                        source=source, overwrite=False)
                     if written:
                         proxy.log(f"codex binding {session_id} ({source}) -> "
                                   f"{self.record['name']}/{self.record['file']}")

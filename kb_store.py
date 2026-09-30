@@ -174,12 +174,17 @@ def validate_developer_text(text):
 
 
 def publish(store, name, info, jsonl=None, *, create_only=False, filename="latest.json",
-            developer_text=None):
-    """Commit registration or a complete KB; concurrent Git pushes stay atomic."""
+            developer_text=None, default_developer_text=None):
+    """Commit registration or a complete KB; concurrent Git pushes stay atomic.
+
+    `developer_text` replaces dev.txt; `default_developer_text` is written only
+    when the KB has no dev.txt yet (checked in the fresh clone, never overwrites).
+    """
     name_value(name)
     metadata = info_filename(filename)
-    if developer_text is not None:
-        validate_developer_text(developer_text)
+    for text in (developer_text, default_developer_text):
+        if text is not None:
+            validate_developer_text(text)
     branch = store.get("branch") or default_branch(store["url"])
     with tempfile.TemporaryDirectory(prefix="kb-publish-") as temporary:
         repo = Path(temporary) / "store"
@@ -198,6 +203,9 @@ def publish(store, name, info, jsonl=None, *, create_only=False, filename="lates
             files.append(f"{name}/info.json")
         (directory / metadata).write_text(json.dumps(info, ensure_ascii=False, indent=2) + "\n")
         files.append(f"{name}/{metadata}")
+        if developer_text is None and default_developer_text is not None \
+                and not (directory / "dev.txt").exists():
+            developer_text = default_developer_text
         if developer_text is not None:
             (directory / "dev.txt").write_text(developer_text, encoding="utf-8")
             files.append(f"{name}/dev.txt")

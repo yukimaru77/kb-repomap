@@ -26,9 +26,6 @@ def _decrypt_files(loaded, name, filename):
 def build_context(loaded, name, filename):
     """Build the Claude startup context from store-owned text only."""
     parts = []
-    developer = loaded.get("developer_text")
-    if developer and developer.strip():
-        parts.append("## KB developer notes\n\n" + developer.rstrip())
     files = _decrypt_files(loaded, name, filename)
     if not files:
         raise ValueError(
@@ -36,6 +33,10 @@ def build_context(loaded, name, filename):
         )
     for relative, text in files:
         parts.append(f"## Decrypted KB material: {relative}\n\n{text.rstrip()}")
+    # dev.txt follows the material, as guidance on how to use it.
+    developer = loaded.get("developer_text")
+    if developer and developer.strip():
+        parts.append("## KB developer notes\n\n" + developer.rstrip())
     return "\n\n".join(parts) + "\n"
 
 

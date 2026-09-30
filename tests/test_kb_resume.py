@@ -180,5 +180,21 @@ class ClaudeResumeTests(Isolated):
         self.assertEqual(json.loads(self.upstream.requests[0]["body"])["messages"], [PROMPT])
 
 
+class CodexItemsTests(unittest.TestCase):
+    def test_all_items_are_injected_even_for_old_local_guidance_bindings(self):
+        blob = {"type": "compaction", "encrypted_content": "opaque"}
+        with tempfile.TemporaryDirectory() as temporary:
+            snapshot = Path(temporary) / "kb.json"
+            snapshot.write_text(json.dumps([blob]))
+            dev = {"type": "message", "role": "developer", "content": [
+                {"type": "input_text", "text": "notes\n"}]}
+            loaded = {"jsonl": snapshot, "developer_text": "notes\n", "info": {"source_kind": "paper"}}
+            with mock.patch.object(kb_resume, "_loaded", return_value=loaded):
+                for record in ({"name": "kb", "file": "latest.json"},
+                               {"name": "kb", "file": "latest.json", "local_guidance": True}):
+                    with self.subTest(record=record):
+                        self.assertEqual(kb_resume.codex_items({}, record), [blob, dev])
+
+
 if __name__ == "__main__":
     unittest.main()

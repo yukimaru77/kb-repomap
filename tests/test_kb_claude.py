@@ -40,6 +40,22 @@ class ClaudeContextTests(unittest.TestCase):
         self.assertIn("記録の場所", text)
         self.assertIn("復号された知識", text)
 
+    def test_dev_notes_follow_all_decrypted_material(self):
+        text = kb_claude.build_context(self.loaded, "example", "latest.json")
+        material = text.index("## Decrypted KB material: example/decrypt/latest/01-blob/raw.txt")
+        notes = text.index("## KB developer notes\n\n記録の場所")
+        self.assertLess(material, notes)
+        self.assertLess(text.index("復号された知識"), notes)
+        self.assertTrue(text.endswith("記録の場所\n"))
+
+    def test_no_dev_means_no_notes_section(self):
+        for developer in (None, "", " \n"):
+            with self.subTest(developer=developer):
+                text = kb_claude.build_context({**self.loaded, "developer_text": developer},
+                                               "example", "latest.json")
+                self.assertNotIn("## KB developer notes", text)
+                self.assertIn("復号された知識", text)
+
     def test_missing_decrypt_is_rejected(self):
         empty_repo = self.root / "empty"
         kb_store.run(["git", "init", "-q", "-b", "main", str(empty_repo)])

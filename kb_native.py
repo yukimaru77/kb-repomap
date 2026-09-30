@@ -175,12 +175,12 @@ def run_legacy_remote(args, config, snapshot, workspace, context, *, developer_t
                       runner=None):
     """`kb codex NAME --remote`: seed a thread, then resume it through kb's proxy."""
     remote = RemoteKB(config, snapshot, developer_text=developer_text)
-    # The seeded thread persists the guidance item (and update context) locally,
-    # so the proxy inserts the rest; nothing is doubled.
+    # The seeded thread persists no KB item (only update context or a seed
+    # marker), so the proxy inserts all items, dev.txt included; nothing is doubled.
     from kb_resume import CodexBinder
-    record = {**_record(args), "local_guidance": True}
-    binder = CodexBinder(config, record, remote.items[1:])
-    running, provider = start_proxy(remote, remote.items[1:], on_request=binder.observe)
+    record = _record(args)
+    binder = CodexBinder(config, record, remote.items)
+    running, provider = start_proxy(remote, remote.items, on_request=binder.observe)
     with running:
         added = proxy_overrides(running.url, provider)
         os.environ["KB_NATIVE_POOL_KEY"] = PROXY_KEY
@@ -189,7 +189,7 @@ def run_legacy_remote(args, config, snapshot, workspace, context, *, developer_t
                                             full_access=not args.no_yolo, prompt=args.prompt,
                                             remote=seeded, overrides=added, developer_text=developer_text)
         print(f"session: {session_id}", flush=True)
-        print(f"Remote KB: proxy 127.0.0.1:{running.port} / {len(remote.items) - 1} items / provider", flush=True)
+        print(f"Remote KB: proxy 127.0.0.1:{running.port} / {len(remote.items)} items / provider", flush=True)
         if args.session_only or args.app:
             if args.app:
                 subprocess.run(["open", f"codex://threads/{session_id}"], check=True)
@@ -213,7 +213,7 @@ class _Seeded:
     def __init__(self, record):
         self.record = record
 
-    def bind(self, session_id, *, include_guidance=True):
+    def bind(self, session_id):
         proxy.write_binding(session_id, "codex", self.record["name"], self.record["store"], self.record["file"],
-                            source="thread/start", local_guidance=not include_guidance)
+                            source="thread/start")
         return session_id

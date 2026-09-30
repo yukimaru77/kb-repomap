@@ -13,7 +13,7 @@ import kb_native
 import kb_native_local
 import kb_remote
 import kb_store
-from kb_items import dump_items, guidance_item, load_session_items
+from kb_items import DEFAULT_DEVELOPER_TEXT, developer_item, dump_items, load_session_items
 
 
 class StoreDeveloperTests(unittest.TestCase):
@@ -76,6 +76,40 @@ class StoreDeveloperTests(unittest.TestCase):
         self.assertEqual(loaded["jsonl"].read_bytes(), self.snapshot.read_bytes())
         self.assertEqual(kb_store.publish(self.store, "example", self.info, self.snapshot,
                                          developer_text=developer), revision)
+
+    def test_default_developer_is_written_only_when_absent_in_the_same_commit(self):
+        before = kb_store.git(self.store["url"], "rev-parse", "HEAD").stdout.strip()
+        dump_items(self.snapshot, [{**self.blobs[0], "encrypted_content": "new-opaque"}])
+        revision = kb_store.publish(self.store, "example", self.info, self.snapshot,
+                                    default_developer_text=DEFAULT_DEVELOPER_TEXT)
+        changed = kb_store.git(self.store["url"], "diff", "--name-only", before, revision).stdout.splitlines()
+        self.assertEqual(changed, ["example/dev.txt", "example/latest.json"])
+        self.assertEqual(kb_store.git(self.store["url"], "rev-list", "--count",
+                                     f"{before}..{revision}").stdout.strip(), "1")
+        self.assertEqual(kb_store.find_kb(self.config, "example")["developer_text"], DEFAULT_DEVELOPER_TEXT)
+        self.set_developer("Custom notes.\n")
+        dump_items(self.snapshot, [{**self.blobs[0], "encrypted_content": "newer-opaque"}])
+        kb_store.publish(self.store, "example", self.info, self.snapshot,
+                         default_developer_text=DEFAULT_DEVELOPER_TEXT)
+        loaded = kb_store.find_kb(self.config, "example")
+        self.assertEqual(loaded["developer_text"], "Custom notes.\n")
+        self.assertEqual(json.loads(loaded["jsonl"].read_text())[0]["encrypted_content"], "newer-opaque")
+
+    def test_create_writes_default_dev_when_absent_and_keeps_existing(self):
+        loaded = kb_store.find_kb(self.config, "example")
+        self.assertIsNone(loaded["developer_text"])
+        rebuilt = self.root / "rebuilt" / "latest.json"
+        rebuilt.parent.mkdir()
+        dump_items(rebuilt, self.blobs)
+        with mock.patch.object(kb_cli, "rebuild", return_value=rebuilt), \
+             contextlib.redirect_stdout(io.StringIO()):
+            kb_cli.create_kb("example", loaded, "b" * 40, self.config)
+            self.assertEqual(kb_store.find_kb(self.config, "example")["developer_text"], DEFAULT_DEVELOPER_TEXT)
+            self.set_developer("Keep this.\n")
+            kb_cli.create_kb("example", kb_store.find_kb(self.config, "example"), "c" * 40, self.config)
+        after = kb_store.find_kb(self.config, "example")
+        self.assertEqual(after["developer_text"], "Keep this.\n")
+        self.assertEqual(after["info"]["source_commit"], "c" * 40)
 
     def test_publish_only_developer_preserves_all_other_git_objects_and_is_idempotent(self):
         before = kb_store.git(self.store["url"], "rev-parse", "HEAD").stdout.strip()
@@ -190,17 +224,20 @@ class StoreDeveloperTests(unittest.TestCase):
         self.set_developer(developer)
         dev_item = {"type": "message", "role": "developer",
                     "content": [{"type": "input_text", "text": developer}]}
+        seed = developer_item(kb_codex.REMOTE_SEED_TEXT)
         original = self.snapshot.read_bytes()
         loaded = kb_store.find_kb(self.config, "example")
         for remote in (False, True):
             for native in (False, True):
                 with self.subTest(remote=remote, native=native):
                     injected, bound = self.launch_items(remote=remote, native=native)
-                    self.assertEqual(injected + bound, [guidance_item(), dev_item, *self.blobs])
                     if remote:
-                        self.assertIn(dev_item, bound)
-                        self.assertNotIn(dev_item, injected)
+                        # The proxy inserts every KB item, dev.txt after the blobs.
+                        self.assertEqual(bound, [*self.blobs, dev_item])
+                        # A seeded legacy thread persists only a neutral marker.
+                        self.assertEqual(injected, [] if native else [seed])
                     else:
+                        self.assertEqual(injected, [*self.blobs, dev_item])
                         self.assertEqual(bound, [])
                     self.assertEqual(loaded["jsonl"].read_bytes(), original)
                     self.assertEqual(self.snapshot.read_bytes(), original)
@@ -212,15 +249,16 @@ class StoreDeveloperTests(unittest.TestCase):
                     self.set_developer(developer)
                 for remote in (False, True):
                     injected, bound = self.launch_items(remote=remote)
-                    self.assertEqual(injected + bound, [guidance_item(), *self.blobs])
+                    kb = [item for item in injected + bound
+                          if item != developer_item(kb_codex.REMOTE_SEED_TEXT)]
+                    self.assertEqual(kb, self.blobs)
 
     def test_loader_uses_explicit_text_only_and_does_not_read_adjacent_dev(self):
         (self.snapshot.parent / "dev.txt").write_text("Do not auto-import adjacent files.\n")
         original = self.snapshot.read_bytes()
         for developer in (None, "", "\n \t"):
             with self.subTest(developer=developer):
-                self.assertEqual(load_session_items(self.snapshot, developer_text=developer),
-                                 [guidance_item(), *self.blobs])
+                self.assertEqual(load_session_items(self.snapshot, developer_text=developer), self.blobs)
         self.assertEqual(self.snapshot.read_bytes(), original)
 
 

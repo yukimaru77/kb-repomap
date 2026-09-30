@@ -13,7 +13,7 @@ import kb_cli
 import kb_codex
 from kb_remote import RemoteKB
 from kb_fork_mint import CHARTER
-from kb_items import guidance_item
+from kb_items import developer_item
 
 
 class RemoteKBTests(unittest.TestCase):
@@ -55,7 +55,7 @@ class RemoteKBTests(unittest.TestCase):
                     remote.bind("new-session")
                 self.assertEqual(dict(os.environ), before)
                 self.assertEqual(source.read_bytes(), original)
-                expected_items = [guidance_item(), *items[:-1]]
+                expected_items = items[:-1]
                 self.assertEqual(seen, [("/_pool/kb/bind", "Bearer test-key", {"session_id": "new-session", "items": expected_items})])
                 portable = root / "latest.json"
                 portable.write_text(json.dumps(items))
@@ -64,8 +64,8 @@ class RemoteKBTests(unittest.TestCase):
                 self.assertEqual(seen[-1], ("/_pool/kb/bind", "Bearer test-key", {
                     "session_id": "portable-session", "items": expected_items}))
                 with contextlib.redirect_stdout(io.StringIO()):
-                    remote.bind("legacy-session", include_guidance=False)
-                self.assertEqual(seen[-1][2]["items"], items[:-1])
+                    RemoteKB(config, portable, developer_text="notes\n").bind("dev-session")
+                self.assertEqual(seen[-1][2]["items"], [*items[:-1], developer_item("notes\n")])
         finally:
             server.shutdown()
             server.server_close()
@@ -87,10 +87,10 @@ class RemoteKBTests(unittest.TestCase):
         self.assertEqual(result, "new-id")
         self.assertEqual(calls.method_calls[:6], [
             mock.call.bootstrap.start(Path("/work"), False),
-            mock.call.remote.bind("new-id", include_guidance=False),
+            mock.call.remote.bind("new-id"),
             mock.call.bootstrap.request("thread/inject_items", {
                 "threadId": "new-id",
-                "items": [guidance_item()],
+                "items": [developer_item(kb_codex.REMOTE_SEED_TEXT)],
             }),
             mock.call.bootstrap.request("thread/name/set", {"threadId": "new-id", "name": "example Remote KBを活用する"}),
             mock.call.active.resume("new-id", Path("/work"), False),
@@ -111,7 +111,7 @@ class RemoteKBTests(unittest.TestCase):
             server.run_turn.assert_not_called()
             constructor.assert_called_once()
 
-    def test_no_prompt_binds_and_persists_guidance_before_closing_without_inference(self):
+    def test_no_prompt_binds_and_persists_diff_before_closing_without_inference(self):
         calls = mock.Mock()
         remote = mock.Mock()
         with mock.patch.object(kb_codex, "CodexAppServer") as constructor:
@@ -124,9 +124,9 @@ class RemoteKBTests(unittest.TestCase):
         self.assertEqual(result, "new-id")
         self.assertEqual(calls.method_calls, [
             mock.call.server.start(Path("/work"), False),
-            mock.call.remote.bind("new-id", include_guidance=False),
+            mock.call.remote.bind("new-id"),
             mock.call.server.request("thread/inject_items", {"threadId": "new-id", "items": [
-                guidance_item(), {"type": "message", "role": "developer", "content": [
+                {"type": "message", "role": "developer", "content": [
                     {"type": "input_text", "text": "SOURCE DIFF"}]}]}),
             mock.call.server.request("thread/name/set", {
                 "threadId": "new-id", "name": "example Remote KBを活用する"}),
@@ -148,7 +148,7 @@ class RemoteKBTests(unittest.TestCase):
         loaded = {"store": {"name": "chosen"}, "jsonl": Path("v1.00.jsonl"),
                   "info": {"repository_url": "repo", "source_commit": "a" * 40, "branch": "main"}}
         config = {"build_args": ["--workers", "12"]}
-        remote = mock.Mock(origin="http://127.0.0.1:1", key="POOLKEY", items=["guidance", "kb"])
+        remote = mock.Mock(origin="http://127.0.0.1:1", key="POOLKEY", items=["kb", "dev"])
         with tempfile.TemporaryDirectory() as temporary, \
              mock.patch.dict(os.environ, {"CODEX_HOME": temporary, "KB_CODEX_CONFIG_OVERRIDES": "[]"}), \
              mock.patch.object(kb_cli.store, "read_config", return_value=config), \
@@ -156,6 +156,7 @@ class RemoteKBTests(unittest.TestCase):
              mock.patch.object(kb_cli.store, "source_update", return_value=("b" * 40, "SOURCE DIFF")), \
              mock.patch.object(kb_native, "RemoteKB", return_value=remote) as constructor, \
              mock.patch.object(kb_native.proxy, "start") as start_proxy, \
+             mock.patch.object(kb_native.proxy, "codex_injector") as injector, \
              mock.patch.object(kb_codex, "start_session", return_value="new-id") as start, \
              contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()) as err:
             Path(temporary, "models_cache.json").write_text("{}")
@@ -166,17 +167,18 @@ class RemoteKBTests(unittest.TestCase):
         find.assert_called_once_with(config, "example", "chosen", filename="v1.00.json")
         constructor.assert_called_once_with(config, loaded["jsonl"], developer_text=None)
         self.assertEqual(start.call_args.args[3], "SOURCE DIFF")
-        # The seeded thread keeps the guidance locally; the proxy inserts the rest.
+        # The seeded thread persists no KB item; the proxy inserts all of them.
+        injector.assert_called_once_with(["kb", "dev"])
         self.assertEqual(start_proxy.call_args.args[1], "http://127.0.0.1:1/backend-api/codex")
         self.assertEqual(start_proxy.call_args.kwargs["set_headers"], {"Authorization": "Bearer POOLKEY"})
         self.assertIn('model_provider="kb_pool"', start.call_args.kwargs["overrides"])
         self.assertIn("http://127.0.0.1:5", " ".join(start.call_args.kwargs["overrides"]))
         with tempfile.TemporaryDirectory() as bindings, \
              mock.patch.object(kb_native.proxy, "BINDINGS", Path(bindings)):
-            start.call_args.kwargs["remote"].bind("new-id", include_guidance=False)
+            start.call_args.kwargs["remote"].bind("new-id")
             record = kb_native.proxy.read_binding("new-id", "codex")
-        self.assertEqual((record["name"], record["store"], record["file"], record["local_guidance"]),
-                         ("example", "chosen", "v1.00.json", True))
+        self.assertEqual((record["name"], record["store"], record["file"]), ("example", "chosen", "v1.00.json"))
+        self.assertNotIn("local_guidance", record)
         self.assertIn("kb --remote codex resume new-id", err.getvalue())
 
     def test_empty_snapshot_is_rejected_before_creating_codex_session(self):

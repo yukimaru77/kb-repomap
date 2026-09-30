@@ -5,7 +5,7 @@ Copyright (c) 2026 GMO Pepabo, Inc. See LICENSE.kb-cli.
 import json
 import os
 import subprocess
-from kb_items import guidance_item, load_session_items
+from kb_items import developer_item, load_session_items
 
 
 def config_flags(overrides=()):
@@ -103,6 +103,11 @@ class CodexAppServer:
         self.process.stdout.close()
 
 
+# Persisted only to create a resumable rollout for a remote-KB thread when there
+# is no update context; the KB itself is inserted by kb's proxy per request.
+REMOTE_SEED_TEXT = "This thread uses a remote KB; its material is supplied at inference time."
+
+
 def start_session(jsonl, workspace, name, update_context, *, full_access=True, prompt=None, remote=None,
                   run_initial_turn=None, overrides=(), developer_text=None):
     # Seeding a resumable session does not itself constitute a user request.
@@ -119,13 +124,14 @@ def start_session(jsonl, workspace, name, update_context, *, full_access=True, p
         # the first user turn opens a socket with the binding already in place.
         with (CodexAppServer(overrides) if overrides else CodexAppServer()) as bootstrap:
             session_id = bootstrap.start(workspace, full_access)
-            remote.bind(session_id, include_guidance=False)
+            remote.bind(session_id)
             # Naming an empty thread only updates its index; it does not create
-            # a rollout. Persist the developer guidance through the native
-            # history API; the binding omits it to avoid injecting it twice.
+            # a rollout. Persist the update context (or a neutral seed marker)
+            # through the native history API. The binding carries every KB item,
+            # dev.txt included, so nothing from the KB is persisted or doubled.
             bootstrap.request("thread/inject_items", {
                 "threadId": session_id,
-                "items": [guidance_item(), *context_items],
+                "items": context_items or [developer_item(REMOTE_SEED_TEXT)],
             })
             bootstrap.request("thread/name/set", {"threadId": session_id, "name": f"{name} Remote KBを活用する"})
         if not run_initial_turn:

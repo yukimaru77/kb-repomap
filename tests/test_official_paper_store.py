@@ -9,7 +9,7 @@ import test_kb_cli
 import kb_cli
 import kb_paper
 import kb_store
-from kb_items import load_items
+from kb_items import DEFAULT_DEVELOPER_TEXT, load_items
 
 
 class OfficialPaperStoreTest(unittest.TestCase):
@@ -99,7 +99,9 @@ class OfficialPaperStoreTest(unittest.TestCase):
         self.assertFalse((self.run / 'result.json').exists())
         files = kb_store.git(kb_store.cached_repo(self.store2['url'], 'stores'), 'ls-tree', '-r', '--name-only',
                              loaded['store_revision'], '--', 'paper').stdout.splitlines()
-        self.assertEqual(files, ['paper/info.json', 'paper/latest.json'])
+        # The default dev.txt is published with the KB when the store has none.
+        self.assertEqual(files, ['paper/dev.txt', 'paper/info.json', 'paper/latest.json'])
+        self.assertEqual(loaded['developer_text'], DEFAULT_DEVELOPER_TEXT)
         output = io.StringIO()
         with contextlib.redirect_stdout(output), mock.patch.object(kb_cli.kb_codex, 'start_session', return_value='id'):
             kb_cli.main(['codex', 'paper', '--store', 'second', '--session-only'])

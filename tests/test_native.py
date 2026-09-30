@@ -39,7 +39,7 @@ class NativeTests(unittest.TestCase):
                 constructor.assert_called_once()
                 server.run_turn.assert_not_called()
                 injected = server.request.call_args_list[0].args[1]["items"]
-                self.assertEqual(len(injected), 3)
+                self.assertEqual(len(injected), 2)  # blob, then update context (no fixed guidance)
                 self.assertEqual(injected[-1]["role"], "developer")
                 self.assertEqual(injected[-1]["content"][0]["text"], "SOURCE DIFF")
                 execute.assert_called_once_with("codex", [

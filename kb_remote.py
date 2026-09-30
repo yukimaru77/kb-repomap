@@ -38,8 +38,8 @@ class RemoteKB:
         self._config = config
         self._environ = dict(os.environ)  # resolve against the launch-time environment
         self._endpoint = None
-        # Session metadata belongs to Codex. Keep developer guidance and the
-        # portable memories; never import the producer's session configuration.
+        # Session metadata belongs to Codex. Keep the portable memories and
+        # the store dev.txt; never import the producer's session configuration.
         self.items = load_session_items(jsonl, developer_text=developer_text)
 
     def _resolve(self):
@@ -55,13 +55,11 @@ class RemoteKB:
     def key(self):
         return self._resolve()[1]
 
-    def bind(self, session_id, *, include_guidance=True):
+    def bind(self, session_id):
         # Pool-side binding (/_pool/kb/bind). kb itself no longer calls this;
         # kb's own proxy injects the items (see kb_remote_proxy).
-        # The legacy app-server launcher persists the first item locally to
-        # create a resumable rollout. Native launches keep it in the binding.
-        # Store dev.txt remains in both bindings, so it is never lost or doubled.
-        items = self.items if include_guidance else self.items[1:]
+        # All items (KB blobs, then store dev.txt) are bound; nothing is kept locally.
+        items = self.items
         request = urllib.request.Request(
             self.origin + "/_pool/kb/bind",
             data=json.dumps({"session_id": session_id, "items": items}, ensure_ascii=False).encode(),

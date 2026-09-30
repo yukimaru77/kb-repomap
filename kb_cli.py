@@ -12,7 +12,7 @@ import uuid
 
 import kb_codex
 import kb_store as store
-from kb_items import dump_items, load_items
+from kb_items import DEFAULT_DEVELOPER_TEXT, dump_items, load_items
 from kb_api import COMPACTION_TYPES
 from kb_fork_mint import CHARTER
 from kb_source import source_address
@@ -137,7 +137,8 @@ def create_kb(name, loaded, commit, config, filename="latest.json", *, previous=
         info["pack_manifest"] = manifest
     else:
         info.pop("pack_manifest", None)
-    revision = store.publish(loaded["store"], name, info, jsonl, filename=filename)
+    revision = store.publish(loaded["store"], name, info, jsonl, filename=filename,
+                             default_developer_text=DEFAULT_DEVELOPER_TEXT)
     print(f"KBを作成・保存しました: {name}/{filename} / {revision}", flush=True)
     return jsonl
 
@@ -154,7 +155,8 @@ def publish_paper(args, config):
             main_source_repository_url=getattr(args, 'main_source_repository_url', None))
         selected = store.configured_stores(config, args.store)[0]
         revision = store.publish(selected, args.name, info, run / 'kb.json', filename=args.file,
-                                 developer_text=developer_text)
+                                 developer_text=developer_text,
+                                 default_developer_text=DEFAULT_DEVELOPER_TEXT)
         print(f"論文KBを保存しました: {args.name}/{args.file} / store: {selected['name']} / {revision}")
         return
     if getattr(args, 'source_repository_url', None) or getattr(args, 'main_source_repository_url', None):
@@ -186,7 +188,7 @@ def publish_paper(args, config):
     store.verify_source_commit(info)
     selected = store.configured_stores(config, args.store)[0]
     revision = store.publish(selected, args.name, info, snapshot, filename=args.file,
-                             developer_text=developer_text)
+                             developer_text=developer_text, default_developer_text=DEFAULT_DEVELOPER_TEXT)
     print(f"論文KBを保存しました: {args.name}/{args.file} / store: {selected['name']} / {revision}")
 
 
