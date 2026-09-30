@@ -339,7 +339,8 @@ class ClaudeUserBlockTests(unittest.TestCase):
             "CRITICAL: Respond with TEXT ONLY. Do NOT call any tools.\n\n- Do NOT use Read.\n\n" + proxy.CLAUDE_COMPACTION_ANCHOR + ", paying close attention"}]}))
         self.assertFalse(proxy.is_claude_compaction_request({"messages": [
             {"role": "user", "content": proxy.CLAUDE_COMPACTION_ANCHOR}, {"role": "user", "content": "later"}]}))
-        self.assertFalse(proxy.is_claude_compaction_request({"messages": [
+        # The anchor may sit anywhere in the last user message (contains-match).
+        self.assertTrue(proxy.is_claude_compaction_request({"messages": [
             {"role": "user", "content": "please: " + proxy.CLAUDE_COMPACTION_ANCHOR}]}))
 
     def test_leak_guard_warns_once_without_altering_the_summary(self):
