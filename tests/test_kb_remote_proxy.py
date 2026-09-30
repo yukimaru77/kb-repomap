@@ -334,6 +334,9 @@ class ClaudeUserBlockTests(unittest.TestCase):
     def test_compaction_anchor_in_string_content_after_reminders(self):
         text = "<system-reminder>r</system-reminder>\n" + proxy.CLAUDE_COMPACTION_ANCHOR
         self.assertTrue(proxy.is_claude_compaction_request({"messages": [{"role": "user", "content": text}]}))
+        # Real Claude Code prefixes the task with a "CRITICAL: Respond with TEXT ONLY" preamble (anchor at ~380 chars).
+        self.assertTrue(proxy.is_claude_compaction_request({"messages": [{"role": "user", "content":
+            "CRITICAL: Respond with TEXT ONLY. Do NOT call any tools.\n\n- Do NOT use Read.\n\n" + proxy.CLAUDE_COMPACTION_ANCHOR + ", paying close attention"}]}))
         self.assertFalse(proxy.is_claude_compaction_request({"messages": [
             {"role": "user", "content": proxy.CLAUDE_COMPACTION_ANCHOR}, {"role": "user", "content": "later"}]}))
         self.assertFalse(proxy.is_claude_compaction_request({"messages": [

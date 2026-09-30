@@ -141,7 +141,9 @@ def is_claude_compaction_request(payload):
         if not match:
             break
         text = text[match.end():]
-    return text.lstrip().startswith(CLAUDE_COMPACTION_ANCHOR)
+    # Claude Code prefixes the compaction task with a "CRITICAL: Respond with
+    # TEXT ONLY…" preamble, so the anchor is not at the start of the message.
+    return CLAUDE_COMPACTION_ANCHOR in text
 
 
 def _insert_position(blocks):
