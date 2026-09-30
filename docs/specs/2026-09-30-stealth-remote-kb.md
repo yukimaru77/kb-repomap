@@ -35,7 +35,10 @@ kb NAME --remote codex|claude [args]
 
 - Codex HTTP `POST chatgpt.com/backend-api/codex/responses`: `input` の先頭 system/developer 直後に items を挿入。`compaction_trigger` / `request_kind=compaction` は素通し。`previous_response_id` 付きは拒否せず、**WS と同じ会話追跡**で扱う（下記）。
 - Codex WS `GET chatgpt.com/backend-api/codex/responses`（upgrade）: client→server のテキストフレームで `type == "response.create"` のものに、HTTP と同じ規則で `input` へ挿入する。`previous_response_id` を使う継続要求では、号池の `kbConversation.transform`（`codex-account-pool/internal/pool/remote_kb_websocket.go`）と同じく、接続内で最初の完全な input に注入し、以降の差分要求は素通しする。server→client フレームは触らない。
-- Claude `POST api.anthropic.com/v1/messages`: `system` を配列に正規化し、末尾ブロックの直前に KB ブロックを挿入（現行どおり）。
+- Claude `POST api.anthropic.com/v1/messages`: `system` は変更しない。KB は Claude Code 自身の `/compact` 要約と同じ形の user テキストブロック（`This session is being continued from a previous conversation that ran out of context. The summary below covers the earlier portion of the conversation.\n\n` + KB 本文）にし、**最初の `role: user` メッセージ**に挿入する。位置は先頭の `<system-reminder>` テキストブロック群の直後で、セッション自身の要約ブロック（同じ定型文で始まる）があればその直前。文字列 `content` は `[{"type":"text",...}]` に正規化する。user メッセージがなければ素通し（`proxy.log` に1行）。`messages` 内の `role: system` には触れない。
+  - compaction 要求（最後の user メッセージが `<system-reminder>` を除いて `Your task is to create a detailed summary of the conversation so far` で始まる）は Codex の `compaction_trigger` と同様に素通しし、セッションごとに初回だけ `stealth: compaction request, KB not injected` を記録する。
+  - 漏れ検知: kb が挿入していない要約ブロックに `## Decrypted KB material:` 等の KB 見出しがあれば、セッションごとに1回 `warning: KB text found inside Claude's compaction summary (anchor may have drifted)` を記録する（ブロックは変更しない）。
+  - loopback provider プロキシと stealth addon は同じ関数（`kb_remote_proxy.claude_edit` → `is_claude_compaction_request` / `inject_claude_user_block`）を使う。
 - 上記以外のパス・ホストは byte-for-byte 素通し。`--allow-hosts` で対象 2 ホスト以外は TLS 終端もしない。
 - 圧縮ボディ（gzip/zstd）は mitmproxy が透過的に扱う（`flow.request.text` / `set_text`）。
 
@@ -66,7 +69,7 @@ kb NAME --remote codex|claude [args]
 
 ## テスト
 
-- 純関数: WS `response.create` の注入と `previous_response_id` 追跡（号池の `remote_kb_websocket_test.go` のケースを Python に写す）、HTTP 注入、Claude 注入（既存）。
+- 純関数: WS `response.create` の注入と `previous_response_id` 追跡（号池の `remote_kb_websocket_test.go` のケースを Python に写す）、HTTP 注入、Claude の user ブロック注入・compaction 素通し・漏れ検知。
 - addon: mitmproxy の `tflow`/`taddons` テストユーティリティで、`request` / `websocket_message` フックが対象要求だけを書き換え、他ホスト・他パスを触らないこと。
 - ランチャ: mitmdump のダミー実行ファイルを PATH に置き、子プロセスの env（`HTTPS_PROXY`、Claude の `NODE_EXTRA_CA_CERTS`、`ANTHROPIC_BASE_URL` 不在、provider override 不在）と終了コード伝播、フォールバック分岐を確認。
 - E2E（手動、Herdr の TUI）: `kb octane --remote codex` で `/status` が provider=openai のまま、WS で KB 質問に回答、`resume` で再注入。`kb octane --remote claude` で `/context` の MCP tools が on-demand のまま、KB 質問に回答、`--resume` で再注入。

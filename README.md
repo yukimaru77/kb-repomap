@@ -128,8 +128,9 @@ kb octane --file v1.00 claude --permission-mode bypassPermissions
 ### `--remote` でリクエストごとにKBを挿入する
 
 `--remote` を付けると、KBを起動引数に載せず、kbが起動中だけローカルのプロキシ
-（`127.0.0.1` のランダムポート）を立てます。`POST /v1/messages` の各リクエストの `system` に、
-最後のブロックの直前へKBブロックを1つ挿入してから Anthropic API へ転送します。
+（`127.0.0.1` のランダムポート）を立てます。`POST /v1/messages` の各リクエストで、
+**最初の user メッセージ**へKBのテキストブロックを1つ挿入してから Anthropic API へ転送します。
+`system` は変更しません。
 認証ヘッダーやSSE応答はそのまま中継し、`count_tokens` などの他のパスは変更しません。
 既定は **stealth 方式**で、Claude Code の設定・base URL は変えず `HTTPS_PROXY` と
 `NODE_EXTRA_CA_CERTS` だけを渡します（[`--remote` の方式](#--remote-の方式stealth--provider)）。
@@ -140,6 +141,18 @@ kb octane --remote claude --model sonnet
 kb octane --file v1.00 --remote claude -p "要点を教えて"
 ```
 
+- KBブロックは Claude Code 自身の `/compact` 要約と同じ形です。本文は
+  `This session is being continued from a previous conversation that ran out of context. The summary below covers the earlier portion of the conversation.`
+  で始まり、続けて `## Decrypted KB material: ...` の各見出しが並びます。
+  挿入位置は、先頭に並ぶ `<system-reminder>` ブロックの直後です。セッション自身の要約ブロックがあれば、その直前に置きます。
+  `content` が文字列の場合はテキストブロック1つの配列に直します。user メッセージがない要求は変更せず、`proxy.log` に1行記録します。
+- **compaction 要求にはKBを入れません**。最後の user メッセージが（`<system-reminder>` を除いて）
+  `Your task is to create a detailed summary of the conversation so far` で始まる要求は、Claude Code の要約要求としてそのまま転送します。
+  Codex の `compaction_trigger` と同じ扱いで、要約にKBの本文が混ざるのを防ぎます。
+  セッションごとに最初の1回だけ `proxy.log` に `stealth: compaction request, KB not injected` を記録します。
+- **漏れ検知**: kbが挿入したものではない要約ブロック（上の定型文で始まるもの）に `## Decrypted KB material:` などKBの見出しが
+  含まれていれば、`proxy.log` に `warning: KB text found inside Claude's compaction summary (anchor may have drifted)` を
+  セッションごとに1回記録します。ブロック自体は変更しません。Claude Code の要約指示の文言が変わった可能性を示します。
 - 事前に `kb decrypt octane`（`--file` を使う場合はそのファイル）を実行しておく必要があります。
 - KBの平文が `ps` やコマンドライン長の制限に乗らず、大きなKBもファイル読み込みなしで渡せます。
 - provider 方式: 既に `ANTHROPIC_BASE_URL` を設定している場合は、このセッションだけkbのプロキシで上書きします。
