@@ -42,6 +42,14 @@ class RemoteKB:
         # the store dev.txt; never import the producer's session configuration.
         self.items = load_session_items(jsonl, developer_text=developer_text)
 
+    @property
+    def pool_configured(self):
+        """Whether the launch has enough local-pool settings for provider mode."""
+        args = self._config.get("build_args", [])
+        return any(value in ("--pool-config", "--origin", "--key-file")
+                   for value in args) or any(os.environ.get(key) for key in
+                                             ("KB_POOL_CONFIG", "KB_POOL_ORIGIN", "KB_POOL_KEY_FILE"))
+
     def _resolve(self):
         if self._endpoint is None:
             self._endpoint = pool_endpoint(self._config, self._environ)

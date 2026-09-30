@@ -146,8 +146,10 @@ kb octane claude --continue
 **最初の user メッセージ**へKBのテキストブロックを1つ挿入してから Anthropic API へ転送します。
 `system` は変更しません。
 認証ヘッダーやSSE応答はそのまま中継し、`count_tokens` などの他のパスは変更しません。
-既定は **stealth 方式**で、Claude Code の設定・base URL は変えず `HTTPS_PROXY` と
-`NODE_EXTRA_CA_CERTS` だけを渡します（[`--remote` の方式](#--remote-の方式stealth--provider)）。
+ローカル号池が設定されたCodexでは、既定で **provider 方式**を使い、号池のfill-first経路へ
+各リクエストを送ります。残量が予約率を下回ると、号池が次のアカウントへ自動的に切り替えます。
+Claude Codeは既定で **stealth 方式**（設定・base URLを変えず `HTTPS_PROXY` と
+`NODE_EXTRA_CA_CERTS` だけを渡す）です（[`--remote` の方式](#--remote-の方式stealth--provider)）。
 以下の `ANTHROPIC_BASE_URL`・`ENABLE_TOOL_SEARCH` の項目は provider 方式のときだけです。
 
 ```bash
@@ -302,7 +304,7 @@ kb octane --remote codex review --uncommitted
 kb octane --remote codex exec --help
 ```
 
-既定の stealth 方式では、Codexの設定・provider・ログインは変えず、`HTTPS_PROXY` だけを渡して
+Claudeの既定 stealth 方式では、設定・provider・ログインは変えず、`HTTPS_PROXY` だけを渡して
 chatgpt.com への推論（WebSocket の `response.create`、HTTPの `POST /backend-api/codex/responses`）に
 KBを挿入します（[`--remote` の方式](#--remote-の方式stealth--provider)）。
 以下は明示指定時の provider 方式（`pool-rr` 併用時も）の説明です。
@@ -375,7 +377,7 @@ Codexの永続設定・環境は変更しない（子プロセスにだけ仮の
   `api.anthropic.com` だけで、それ以外のホストは中身に触れずに中継します。
   書き換えるのは Codex の `/backend-api/codex/responses`（WebSocket・HTTP）と Claude の
   `POST /v1/messages` だけです。クライアントの終了で mitmdump も止まり、終了コードはクライアントのものです。
-- **provider（明示指定のみ）**: 従来の loopback プロキシです。Codex は一時的な custom provider、
+- **provider**: loopback プロキシです。Codex は一時的な custom provider、
   Claude は `ANTHROPIC_BASE_URL` でkbのプロキシを指すため、クライアントから見える挙動が変わります。
   そのため**自動では使いません**。mitmdump が見つからない・起動できない場合は、導入手順
   （`uv tool install mitmproxy && kb ca-setup`）と `KB_REMOTE_MODE=provider` の案内を出して終了します。
@@ -389,7 +391,8 @@ stealth 方式でクライアント側に**変わらないもの**:
 
 方式の選択:
 
-- 既定は stealth で、フォールバックはありません。`KB_REMOTE_MODE=provider` を明示したときだけ provider 方式になります。
+- Codexはローカル号池が設定されていればprovider（fill-first）を自動選択します。号池がない場合はstealthを使い、
+  providerへ切り替える場合は `KB_REMOTE_MODE=provider` を明示します。
   mitmdump が見つからない・起動できない場合は案内を出して終了します。
 - **`pool-rr` 併用時（`KB_CODEX_CONFIG_OVERRIDES` がある Codex）は常に provider 方式**です。
   RRの入口は号池のURLを指す必要があるためです。
