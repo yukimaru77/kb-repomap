@@ -72,7 +72,27 @@ os.chmod(output, 0o755)
 print(f'installed: {output}')
 PY
 
+# Put the install dir on PATH for future shells (idempotent, marked block).
+# Set KB_NO_PATH_EDIT=1 to skip editing shell startup files.
+add_path_line() {
+  local rc="$1" line="$2"
+  [ -f "$rc" ] && grep -qF "# >>> kb PATH >>>" "$rc" && return 0
+  mkdir -p "$(dirname "$rc")"
+  printf '\n# >>> kb PATH >>>\n%s\n# <<< kb PATH <<<\n' "$line" >> "$rc"
+  say "PATH を追記しました: $rc"
+}
 if ! printf '%s' ":$user_path:" | grep -q ":$install_dir:"; then
-  say "$install_dir を PATH に追加してください（例: echo 'export PATH=\"$install_dir:\$PATH\"' >> ~/.zshrc）"
+  if [ "${KB_NO_PATH_EDIT:-0}" = 1 ]; then
+    say "$install_dir を PATH に追加してください（例: export PATH=\"$install_dir:\$PATH\"）"
+  else
+    case "$(basename "${SHELL:-}")" in
+      zsh)  add_path_line "${ZDOTDIR:-$HOME}/.zshrc" "export PATH=\"$install_dir:\$PATH\"" ;;
+      bash) add_path_line "$HOME/.bashrc" "export PATH=\"$install_dir:\$PATH\""
+            add_path_line "$HOME/.bash_profile" "export PATH=\"$install_dir:\$PATH\"" ;;
+      fish) add_path_line "${XDG_CONFIG_HOME:-$HOME/.config}/fish/config.fish" "fish_add_path -g \"$install_dir\"" ;;
+      *)    add_path_line "$HOME/.profile" "export PATH=\"$install_dir:\$PATH\"" ;;
+    esac
+    say "新しいシェルを開くと kb が使えます（今のシェルでは: export PATH=\"$install_dir:\$PATH\"）"
+  fi
 fi
 say "完了。Codex の --remote を使う場合は一度だけ 'kb ca-setup' の案内に従って CA を信頼登録してください（Claude だけなら不要）"

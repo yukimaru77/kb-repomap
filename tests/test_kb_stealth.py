@@ -183,7 +183,14 @@ class LauncherTests(FakeMitmdump):
         self.assertEqual(kb_stealth.find_mitmdump(dict(self.env, KB_MITMDUMP=str(other))), str(other))
         self.assertEqual(kb_stealth.find_mitmdump(self.env), str(self.fake))
         with mock.patch.object(kb_stealth, "FALLBACK_MITMDUMP", other):
-            self.assertEqual(kb_stealth.find_mitmdump({"PATH": "/usr/bin:/bin"}), str(other))
+            self.assertEqual(kb_stealth.find_mitmdump({"PATH": "/usr/bin:/bin", "HOME": str(self.dir)}), str(other))
+        # uv tool install puts it in ~/.local/bin even when that is not on PATH yet.
+        local = self.dir / ".local/bin/mitmdump"
+        local.parent.mkdir(parents=True)
+        local.write_text("#!/bin/sh\n")
+        local.chmod(0o755)
+        with mock.patch.object(kb_stealth, "FALLBACK_MITMDUMP", other):
+            self.assertEqual(kb_stealth.find_mitmdump({"PATH": "/usr/bin:/bin", "HOME": str(self.dir)}), str(local))
 
     def test_tls_failure_hint_after_child_exit(self):
         def runner(command, env, cwd):

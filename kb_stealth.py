@@ -49,7 +49,13 @@ def find_mitmdump(env=None):
     found = shutil.which("mitmdump", path=env.get("PATH"))
     if found:
         return found
-    return str(FALLBACK_MITMDUMP) if os.access(FALLBACK_MITMDUMP, os.X_OK) else None
+    # `uv tool install mitmproxy` (what install.sh runs) puts it here even when
+    # ~/.local/bin is not on PATH yet.
+    home = Path(env.get("HOME") or Path.home())
+    for candidate in (home / ".local/bin/mitmdump", FALLBACK_MITMDUMP):
+        if os.access(candidate, os.X_OK):
+            return str(candidate)
+    return None
 
 
 def ca_dir(env=None):

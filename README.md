@@ -34,6 +34,9 @@ map生成自体にLLM呼び出しやAPIキーは不要です。
 `install.sh` は再実行しても安全です。uv が無ければ公式インストーラで導入し、`--remote` に使う
 mitmproxy（`mitmdump`）が無ければ `uv tool install mitmproxy` で導入します。npm（KB作成に使う Repomix 用）は
 自動導入せず、無ければ案内して終了します。`KB_NO_AUTO_INSTALL=1` を付けると導入はせず、不足だけを表示します。
+入れ先（既定 `~/.local/bin`）が PATH に無ければ、ログインシェルの設定ファイル（zsh は `~/.zshrc`、bash は
+`~/.bashrc` と `~/.bash_profile`、fish は `config.fish`）に目印付きで1行追記します（`KB_NO_PATH_EDIT=1` で無効）。
+自分の `uv.toml` が読めない場合は、ユーザー設定だけを無視して再実行します（`uv.toml` 自体は変更しません）。
 
 ## 基本の4コマンド
 
