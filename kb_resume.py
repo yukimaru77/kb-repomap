@@ -180,17 +180,7 @@ def resume_codex(native_args, config, *, runner=None):
         origin, key = pool_endpoint(config)
         return SimpleNamespace(origin=origin, key=key)
 
-    # A bound Codex resume has the same local-pool configuration as a new
-    # remote session.  Force the provider path so the pool can apply
-    # fill-first account selection to each request; stealth would preserve the
-    # stale provider saved in the historical session.
-    pool_args = config.get("build_args", [])
-    pool_configured = any(value in ("--pool-config", "--origin", "--key-file")
-                          for value in pool_args) or any(
-                              os.environ.get(key) for key in
-                              ("KB_POOL_CONFIG", "KB_POOL_ORIGIN", "KB_POOL_KEY_FILE"))
-    return kb_native.launch_remote(native_args, binder, workspace, remote,
-                                   pool_configured=pool_configured, runner=runner)
+    return kb_native.launch_remote(native_args, binder, workspace, remote, runner=runner)
 
 
 # --- Claude ---------------------------------------------------------------
