@@ -17,6 +17,10 @@ DEFAULT_DEVELOPER_TEXT = (
 )
 
 
+# Heads the user item that carries the current map when a KB reuses older blobs.
+REPO_MAP_HEADER = "Current repository map. It supersedes maps inside older reused blobs.\n\n"
+
+
 def developer_item(text):
     return {"type": "message", "role": "developer", "content": [
         {"type": "input_text", "text": text}]}

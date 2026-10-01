@@ -12,7 +12,7 @@ import uuid
 
 import kb_codex
 import kb_store as store
-from kb_items import DEFAULT_DEVELOPER_TEXT, dump_items, load_items
+from kb_items import DEFAULT_DEVELOPER_TEXT, REPO_MAP_HEADER, dump_items, load_items
 import kb_api
 from kb_api import COMPACTION_TYPES
 from kb_fork_mint import CHARTER
@@ -54,7 +54,7 @@ def rebuild(name, info, commit, config, previous=None):
     if state.get("reused_packs"):
         current_map = Path(state["repo_map"]).read_text(encoding="utf-8")
         items.append({"type": "message", "role": "user", "content": [{"type": "input_text",
-            "text": "Current repository map. It supersedes maps inside older reused blobs.\n\n" + current_map}]})
+            "text": REPO_MAP_HEADER + current_map}]})
     items.append({"type": "message", "role": "user",
                   "content": [{"type": "input_text", "text": CHARTER}]})
     snapshot = build_root / name / "kb.json"
