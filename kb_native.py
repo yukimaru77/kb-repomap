@@ -5,6 +5,7 @@ import subprocess
 import sys
 
 import kb_codex
+from kb_items import developer_item
 import kb_remote_proxy as proxy
 import kb_store
 from kb_remote import RemoteKB
@@ -61,7 +62,9 @@ def run(args, config, snapshot, workspace, context, *, developer_text=None):
         from kb_resume import CodexBinder
         binder = CodexBinder(config, _record(args), remote.items)
         return launch_remote(args.native_args, binder, workspace)
-    from kb_native_local import command as local_command, seed_overrides
+    from kb_native_local import command as local_command, resume_request, seed_overrides
+    if resume_request(args.native_args):
+        return run_local_resume(args, snapshot, workspace, context, developer_text=developer_text)
     # Validate the command shape before creating a persisted session.
     local_command(args.native_args, "validation-only")
     session_id = kb_codex.start_session(snapshot, workspace, args.name, context,
@@ -70,6 +73,32 @@ def run(args, config, snapshot, workspace, context, *, developer_text=None):
                                          developer_text=developer_text)
     command = local_command(args.native_args, session_id)
     command = with_config(command[1:], kb_codex.config_flags())
+    os.chdir(workspace)
+    os.execvp(command[0], command)
+
+
+def run_local_resume(args, snapshot, workspace, context, *, developer_text=None):
+    """`kb NAME codex [exec] resume ID|--last`: resume a KB-converted copy of the thread.
+
+    The original thread stays as it is. Codex creates a new thread holding the
+    original's effective history with the KB inserted where a new KB session has it.
+    """
+    import kb_codex_resume
+    from kb_items import load_session_items
+    from kb_native_local import resume_command, resume_request, seed_overrides
+    request = resume_request(args.native_args)
+    overrides = seed_overrides(args.native_args)
+    items = load_session_items(snapshot, developer_text=developer_text)
+    if context:
+        items.append(developer_item(context))
+    with kb_codex.CodexAppServer(overrides) as server:
+        original, session_id = kb_codex_resume.resume_session(
+            server, items, args.name, request, workspace,
+            explicit_model=any(value.startswith("model=") for value in overrides))
+    print(f"kb: {original} を KB 付きの新しいセッション {session_id} に変換しました"
+          f"（元のセッションは変更していません。続きは kb {args.name} codex resume {session_id}）",
+          file=sys.stderr, flush=True)
+    command = with_config(resume_command(args.native_args, session_id)[1:], kb_codex.config_flags())
     os.chdir(workspace)
     os.execvp(command[0], command)
 

@@ -44,6 +44,33 @@ class NativeTests(unittest.TestCase):
                     "codex", "exec", "--json", "resume", "seed", prompt])
                 self.assertEqual(stdin.tell(), 0)
 
+    def test_local_resume_converts_the_thread_and_resumes_the_copy(self):
+        import kb_codex_resume
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            snapshot = root / "kb.json"
+            snapshot.write_text('[{"type":"compaction","encrypted_content":"opaque"}]')
+            args = kb_native.parse(["example", "codex", "exec", "resume", "old-id", "question"])
+            request = {"thread": "old-id", "last": False, "all": False, "exec": True}
+            with mock.patch.object(kb_native_local, "resume_request", return_value=request), \
+                 mock.patch.object(kb_native_local, "resume_command",
+                                   return_value=["codex", "exec", "resume", "new-id", "question"]), \
+                 mock.patch.object(kb_native_local, "seed_overrides", return_value=[]), \
+                 mock.patch.object(kb_codex, "CodexAppServer"), \
+                 mock.patch.object(kb_codex_resume, "resume_session",
+                                   return_value=("old-id", "new-id")) as convert, \
+                 mock.patch.object(kb_native.os, "chdir"), \
+                 mock.patch.object(kb_native.os, "execvp") as execute, \
+                 contextlib.redirect_stderr(io.StringIO()) as stderr:
+                kb_native.run(args, {}, snapshot, root, "SOURCE DIFF", developer_text="GUIDE")
+        kb_items = convert.call_args.args[1]
+        self.assertEqual([item.get("type") for item in kb_items], ["compaction", "message", "message"])
+        self.assertEqual([item["content"][0]["text"] for item in kb_items[1:]], ["GUIDE", "SOURCE DIFF"])
+        self.assertEqual(convert.call_args.args[3], request)
+        execute.assert_called_once_with("codex", ["codex", "exec", "resume", "new-id", "question"])
+        self.assertIn("old-id", stderr.getvalue())
+        self.assertIn("new-id", stderr.getvalue())
+
     def test_codex_boundary_preserves_all_native_arguments(self):
         tail = ["exec", "--json", "-m", "gpt-6-astra", "-c", 'model_reasoning_effort="low"',
                 "--output-schema", "schema.json", "-o", "answer.txt", "--", "--remote"]

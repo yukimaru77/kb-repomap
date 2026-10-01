@@ -312,9 +312,22 @@ Codexの終了とともにプロキシも停止します。最初の推論要求
 
 `--remote` を省略したローカルKBでは、KBを注入したセッションを作り、TUIまたは
 `exec resume` で起動します。Codexのオプションはインストール済みCLIのヘルプから
-判別して渡します。`review` や既存セッションを指定する `resume`・`fork` には
-`--remote` を使ってください。`--ephemeral` を指定しても、ローカルKBを注入する
-準備用セッションは保存されます。
+判別して渡します。`review` と `fork` には `--remote` を使ってください。
+`--ephemeral` を指定しても、ローカルKBを注入する準備用セッションは保存されます。
+
+既存セッションの `resume ID`・`resume --last`（`exec resume` も同じ）は、元のセッションを
+変更せず、KBを挿入した新しいセッションに変換してから再開します。新しいセッションの履歴は
+Codexが再開時に組み立てる実効履歴（最後の compaction の replacement_history とその後の項目、
+compaction が無ければ全項目）で、KBは新規KBセッションと同じく初期コンテキストの直後に入ります。
+compaction 済みの場合も、最後の compaction が置き換えた範囲の前には入れません。元がkbの
+セッションなら古いKB項目は現在のKBに置き換え、二重にはしません。元と新しいセッションのIDは
+stderrに表示します。
+
+```bash
+kb octane codex resume 01a0d6f6-38fa-7291-9546-e25e3da6fd0b
+kb octane codex resume --last -m gpt-6-astra
+kb octane codex exec resume <ID> "続きをお願いします"
+```
 ローカル方式の準備時には `-c` と `-m` を適用しますが、`-p` や
 `--ignore-user-config` などで初期プロンプトの設定まで完全に切り替える場合は
 `--remote` を使ってください。
