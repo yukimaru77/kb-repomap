@@ -92,9 +92,11 @@ def run_local_resume(args, snapshot, workspace, context, *, developer_text=None)
     if context:
         items.append(developer_item(context))
     with kb_codex.CodexAppServer(overrides) as server:
-        original, session_id = kb_codex_resume.resume_session(
+        original, session_id, path, events = kb_codex_resume.resume_session(
             server, items, args.name, request, workspace,
             explicit_model=any(value.startswith("model=") for value in overrides))
+    # The transcript of the original turns, written once the app-server released the thread.
+    kb_codex_resume.append_events(path, session_id, events)
     print(f"kb: {original} を KB 付きの新しいセッション {session_id} に変換しました"
           f"（元のセッションは変更していません。続きは kb {args.name} codex resume {session_id}）",
           file=sys.stderr, flush=True)

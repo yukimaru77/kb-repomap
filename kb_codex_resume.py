@@ -12,8 +12,11 @@ followed by the response items recorded after it, or every response item when
 there was no compaction. Paginated forks keep their parent's prefix behind
 `session_meta.history_base`, which is followed here.
 """
+import fcntl
 import json
+import os
 from pathlib import Path
+import time
 
 from kb_api import COMPACTION_TYPES
 from kb_fork_mint import CHARTER
@@ -25,6 +28,7 @@ KB_ORIGINATOR = "kb_repomap"
 # codex_prompts::SUMMARY_PREFIX: local compaction stores its summary as a user message.
 SUMMARY_PREFIX = "Another language model started to solve this problem"
 MAX_FORK_DEPTH = 64
+LOCK_WAIT_SECONDS = 15
 
 
 def _text(item):
@@ -144,6 +148,91 @@ def effective_history(records):
     return history
 
 
+# EventMsg variants that ThreadHistoryBuilder::handle_event renders into the
+# transcript. Rollout reconstruction reads none of them into model history; it
+# only uses turn boundaries (task_started/task_complete/turn_aborted/user_message)
+# for rollback counting and settings, which the copied turns do not carry.
+DISPLAY_EVENTS = frozenset((
+    "user_message", "agent_message", "agent_reasoning", "agent_reasoning_raw_content",
+    "web_search_begin", "web_search_end", "exec_command_begin", "exec_command_end",
+    "guardian_assessment", "apply_patch_approval_request", "patch_apply_begin", "patch_apply_end",
+    "dynamic_tool_call_request", "dynamic_tool_call_response", "mcp_tool_call_begin",
+    "mcp_tool_call_end", "view_image_tool_call", "image_generation_begin", "image_generation_end",
+    "collab_agent_spawn_begin", "collab_agent_spawn_end", "collab_agent_interaction_begin",
+    "collab_agent_interaction_end", "sub_agent_activity", "collab_waiting_begin",
+    "collab_waiting_end", "collab_close_begin", "collab_close_end", "collab_resume_begin",
+    "collab_resume_end", "context_compacted", "entered_review_mode", "exited_review_mode",
+    "item_started", "item_completed", "error", "turn_aborted", "task_started", "task_complete",
+))
+
+
+def display_events(records):
+    """The original thread's transcript events, with rolled-back turns already removed.
+
+    thread_rolled_back itself is never copied: replayed into the new thread it
+    would also drop turns from the model-visible history.
+    """
+    turns = []
+    for record in records:
+        payload = record.get("payload") or {}
+        if record.get("type") != "event_msg":
+            continue
+        kind = payload.get("type")
+        if kind == "thread_rolled_back":
+            # ThreadHistoryBuilder::handle_thread_rollback drops the last N turns.
+            turns = turns[:max(len(turns) - int(payload.get("num_turns") or 0), 0)]
+        elif kind in DISPLAY_EVENTS:
+            if kind == "task_started" or not turns:
+                turns.append([])
+            turns[-1].append({"timestamp": record.get("timestamp"), "payload": payload})
+    return [event for turn in turns for event in turn]
+
+
+def codex_home():
+    return Path(os.environ.get("CODEX_HOME") or Path.home() / ".codex")
+
+
+def append_events(path, thread_id, events, home=None):
+    """Append display-only event_msg records to a rollout no Codex process is writing.
+
+    Holds the thread's writer lock (rollout/src/writer_lock.rs: an exclusive
+    flock on thread-writer-locks/<id>.lock, created under .coordination.lock)
+    and continues the paginated ordinal sequence that Codex reads back.
+    """
+    if not events:
+        return
+    locks = (home or codex_home()) / "thread-writer-locks"
+    locks.mkdir(parents=True, exist_ok=True)
+    # The seeding app-server may still be exiting behind a launcher wrapper.
+    deadline = time.monotonic() + LOCK_WAIT_SECONDS
+    while True:
+        with (locks / ".coordination.lock").open("a+") as coordination:
+            fcntl.flock(coordination, fcntl.LOCK_EX)
+            writer = (locks / f"{thread_id}.lock").open("a+")
+            try:
+                fcntl.flock(writer, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                writer.close()
+        if time.monotonic() > deadline:
+            raise ValueError(f"Codex セッション {thread_id} は別のプロセスが書き込み中です")
+        time.sleep(0.2)
+    with writer:
+        lines = Path(path).read_text(encoding="utf-8").splitlines()
+        ordinal = json.loads(next(line for line in reversed(lines) if line.strip())).get("ordinal")
+        output = []
+        for event in events:
+            record = {"timestamp": event["timestamp"], "type": "event_msg", "payload": event["payload"]}
+            if ordinal is not None:
+                ordinal += 1
+                record = {"timestamp": event["timestamp"], "ordinal": ordinal, **record}
+            output.append(json.dumps(record, ensure_ascii=False, separators=(",", ":")) + "\n")
+        with Path(path).open("a", encoding="utf-8") as rollout:
+            rollout.write("".join(output))
+            rollout.flush()
+            os.fsync(rollout.fileno())
+
+
 def kb_markers(kb_items):
     """The blobs and message texts by which an earlier copy of this KB is recognized."""
     blobs = {item.get("encrypted_content") for item in kb_items if item.get("type") in COMPACTION_TYPES}
@@ -201,7 +290,11 @@ def latest_thread(server, workspace, all_cwds=False):
 
 
 def resume_session(server, kb_items, name, request, workspace, *, explicit_model=False):
-    """Create the converted thread on `server`; return (original id, new id)."""
+    """Create the converted thread on `server`.
+
+    Returns (original id, new id, new rollout path, display events). The caller
+    appends the events with append_events once this app-server has exited.
+    """
     original = request["thread"] or latest_thread(server, workspace, request["all"])
     source = _thread(server, original)
     if not source.get("path"):
@@ -219,4 +312,5 @@ def resume_session(server, kb_items, name, request, workspace, *, explicit_model
     server.request("thread/inject_items", {"threadId": session_id, "items": items})
     label = source.get("name") or original
     server.request("thread/name/set", {"threadId": session_id, "name": f"{name} KBを活用する ← {label}"})
-    return source["id"], session_id
+    path = _thread(server, session_id)["path"]
+    return source["id"], session_id, path, display_events(records)

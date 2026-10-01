@@ -58,7 +58,8 @@ class NativeTests(unittest.TestCase):
                  mock.patch.object(kb_native_local, "seed_overrides", return_value=[]), \
                  mock.patch.object(kb_codex, "CodexAppServer"), \
                  mock.patch.object(kb_codex_resume, "resume_session",
-                                   return_value=("old-id", "new-id")) as convert, \
+                                   return_value=("old-id", "new-id", "/new.jsonl", ["event"])) as convert, \
+                 mock.patch.object(kb_codex_resume, "append_events") as append, \
                  mock.patch.object(kb_native.os, "chdir"), \
                  mock.patch.object(kb_native.os, "execvp") as execute, \
                  contextlib.redirect_stderr(io.StringIO()) as stderr:
@@ -67,6 +68,7 @@ class NativeTests(unittest.TestCase):
         self.assertEqual([item.get("type") for item in kb_items], ["compaction", "message", "message"])
         self.assertEqual([item["content"][0]["text"] for item in kb_items[1:]], ["GUIDE", "SOURCE DIFF"])
         self.assertEqual(convert.call_args.args[3], request)
+        append.assert_called_once_with("/new.jsonl", "new-id", ["event"])
         execute.assert_called_once_with("codex", ["codex", "exec", "resume", "new-id", "question"])
         self.assertIn("old-id", stderr.getvalue())
         self.assertIn("new-id", stderr.getvalue())

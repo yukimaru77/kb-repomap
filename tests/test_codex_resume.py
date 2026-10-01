@@ -2,6 +2,7 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
+from unittest import mock
 
 import kb_codex_resume as resume
 from kb_items import REPO_MAP_HEADER, developer_item
@@ -129,6 +130,53 @@ class RolloutTests(unittest.TestCase):
         self.assertEqual(resume.effective_history(records), [AGENTS, user("inherited"), user("child turn")])
 
 
+def event(kind, **fields):
+    return {"timestamp": "t", "type": "event_msg", "payload": {"type": kind, **fields}}
+
+
+class DisplayTests(unittest.TestCase):
+    def test_copies_transcript_events_and_applies_rollback_without_copying_it(self):
+        records = [meta(), event("thread_settings_applied"), event("task_started", turn_id="1"),
+                   event("item_completed", n=1), event("token_count"), event("task_complete"),
+                   *items(user("model only")), compacted(user("x")),
+                   event("task_started", turn_id="2"), event("item_completed", n=2),
+                   event("thread_rolled_back", num_turns=1),
+                   event("task_started", turn_id="3"), event("item_completed", n=3)]
+        self.assertEqual([e["payload"] for e in resume.display_events(records)], [
+            {"type": "task_started", "turn_id": "1"}, {"type": "item_completed", "n": 1},
+            {"type": "task_complete"},
+            {"type": "task_started", "turn_id": "3"}, {"type": "item_completed", "n": 3}])
+
+    def test_append_continues_ordinals_and_leaves_model_history_alone(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            rollout = root / "new.jsonl"
+            rollout.write_text("".join(json.dumps({**record, "ordinal": index}) + "\n" for index, record in
+                                       enumerate([meta("new"), *items(*KB, user("PLUM"))])))
+            before = resume.effective_history(resume.read_rollout(rollout, None))
+            events = resume.display_events([event("task_started", turn_id="1"), event("item_completed")])
+            resume.append_events(rollout, "new", events, home=root)
+            records = [json.loads(line) for line in rollout.read_text().splitlines()]
+            self.assertEqual([record["ordinal"] for record in records], list(range(len(records))))
+            self.assertEqual(records[-1]["payload"], {"type": "item_completed"})
+            self.assertEqual(resume.effective_history(resume.read_rollout(rollout, None)), before)
+
+    def test_append_refuses_a_thread_with_an_active_writer(self):
+        import fcntl
+        with tempfile.TemporaryDirectory() as temporary, \
+                mock.patch.object(resume, "LOCK_WAIT_SECONDS", 0):
+            root = Path(temporary)
+            rollout = root / "new.jsonl"
+            rollout.write_text(json.dumps(meta("new")) + "\n")
+            (root / "thread-writer-locks").mkdir()
+            with (root / "thread-writer-locks" / "new.lock").open("a+") as held:
+                fcntl.flock(held, fcntl.LOCK_EX)
+                with self.assertRaises(ValueError):
+                    resume.append_events(rollout, "new", [{"timestamp": "t", "payload": {"type": "error"}}],
+                                         home=root)
+            self.assertEqual(rollout.read_text(), json.dumps(meta("new")) + "\n")
+
+
 class FakeServer:
     def __init__(self, threads):
         self.threads = threads
@@ -137,6 +185,8 @@ class FakeServer:
     def request(self, method, params):
         self.calls.append((method, params))
         if method == "thread/read":
+            if params["threadId"] == "converted":
+                return {"thread": {"id": "converted", "path": "/new.jsonl"}}
             return {"thread": self.threads[params["threadId"]]}
         if method == "thread/list":
             return {"data": [self.threads["original"]]}
@@ -156,12 +206,12 @@ class ResumeSessionTests(unittest.TestCase):
                                               "model": "gpt-6-astra", "reasoningEffort": "high",
                                               "originator": "codex_exec", "name": None}})
             request = {"thread": None, "last": True, "all": False, "exec": True}
-            self.assertEqual(resume.resume_session(server, KB, "octane", request, Path("/w")),
-                             ("original", "converted"))
+            original, converted, path, events = resume.resume_session(server, KB, "octane", request, Path("/w"))
+            self.assertEqual((original, converted, path, events), ("original", "converted", "/new.jsonl", []))
             self.assertEqual(rollout.read_bytes(), before)
         methods = [method for method, _params in server.calls]
         self.assertEqual(methods, ["thread/list", "thread/read", "thread/start", "thread/inject_items",
-                                   "thread/name/set"])
+                                   "thread/name/set", "thread/read"])
         start = server.calls[2][1]
         self.assertEqual((start["cwd"], start["model"], start["config"]),
                          ("/w", "gpt-6-astra", {"model_reasoning_effort": "high"}))
