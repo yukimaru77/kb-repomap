@@ -101,7 +101,7 @@ class LauncherTests(FakeMitmdump):
         self.assertNotIn("NODE_EXTRA_CA_CERTS", seen["env"])
         for name in ("ANTHROPIC_BASE_URL", "ENABLE_TOOL_SEARCH"):
             self.assertNotIn(name, seen["env"])
-        self.assertEqual(seen["command"], ["codex", "-p", "hi"])
+        self.assertEqual(seen["command"], ["codex", "--no-daemon", "-p", "hi"])  # keep traffic in this process
         self.assertNotIn("model_provider", " ".join(seen["command"]))
         self.assertEqual(argv[:5], ["-q", "--listen-host", "127.0.0.1", "-p", port])
         self.assertIn(kb_stealth.ALLOW_HOSTS, argv)
@@ -261,7 +261,7 @@ class WiringTests(FakeMitmdump):
         with mock.patch.object(kb_resume, "codex_items", return_value=items):
             code = kb_resume.resume_codex(["resume", self.SID], {}, runner=self.runner)
         self.assertEqual(code, 4)
-        self.assertEqual(self.seen["command"], ["codex", "resume", self.SID])
+        self.assertEqual(self.seen["command"], ["codex", "resume", "--no-daemon", self.SID])
         self.assertEqual(self.seen["payload"]["items"], items)
         self.assertEqual(self.seen["payload"]["record"]["name"], "octane")
         self.assertIn("HTTPS_PROXY", self.seen["env"])
@@ -309,7 +309,7 @@ class WiringTests(FakeMitmdump):
         self.assertEqual(seeded["payload"]["items"], [{"type": "compaction"}])
         self.assertEqual(seeded["payload"]["record"], {"name": "example", "store": "pepabo", "file": "latest.json"})
         self.assertNotIn("overrides", seeded["kwargs"])
-        self.assertEqual(self.seen["command"], ["codex", "resume", "-C", str(self.dir), self.SID])
+        self.assertEqual(self.seen["command"], ["codex", "resume", "--no-daemon", "-C", str(self.dir), self.SID])
 
     def test_claude_resume_known_id(self):
         import kb_resume
@@ -341,3 +341,20 @@ class WiringTests(FakeMitmdump):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class CodexDaemonTests(unittest.TestCase):
+    """The KB is injected only when Codex's own process carries the traffic."""
+
+    def test_interactive_resume_and_fork_get_no_daemon(self):
+        f = kb_stealth.codex_without_daemon
+        self.assertEqual(f(["codex"]), ["codex", "--no-daemon"])
+        self.assertEqual(f(["codex", "-m", "gpt-x", "hi"]), ["codex", "--no-daemon", "-m", "gpt-x", "hi"])
+        self.assertEqual(f(["codex", "resume", "ID"]), ["codex", "resume", "--no-daemon", "ID"])
+        self.assertEqual(f(["codex", "fork", "ID"]), ["codex", "fork", "--no-daemon", "ID"])
+
+    def test_exec_review_and_existing_flag_unchanged(self):
+        f = kb_stealth.codex_without_daemon
+        for argv in (["codex", "exec", "hi"], ["codex", "review", "--uncommitted"],
+                     ["codex", "--no-daemon", "resume", "ID"], ["claude", "-p", "x"]):
+            self.assertEqual(f(argv), argv)

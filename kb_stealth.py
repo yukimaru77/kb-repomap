@@ -202,7 +202,31 @@ def stealth_session(client, payload, env=None, selection=None):
         yield session
 
 
+# Interactive Codex (and resume/fork) normally hands its model traffic to the
+# shared app-server daemon, a separate long-lived process that did not inherit
+# this session's HTTPS_PROXY, so the KB would silently not be injected.
+# --no-daemon keeps the traffic in the process kb launched. exec/review never
+# use the daemon and do not accept the flag.
+_DAEMON_SUBCOMMANDS = ("resume", "fork")
+
+
+def codex_without_daemon(command):
+    """Return the codex argv with --no-daemon where Codex would use its daemon."""
+    if not command or command[0] != "codex" or "--no-daemon" in command:
+        return list(command)
+    args = command[1:]
+    from kb_native_local import subcommand_index
+    index = subcommand_index(args)
+    if index is None:
+        return ["codex", "--no-daemon", *args]  # interactive TUI
+    if args[index] in _DAEMON_SUBCOMMANDS:
+        return ["codex", *args[:index + 1], "--no-daemon", *args[index + 1:]]
+    return list(command)
+
+
 def run_client(session, client, command, workspace, runner=None):
+    if client == "codex":
+        command = codex_without_daemon(command)
     """Run the client behind `session`, then point at kb ca-setup if its TLS failed."""
     try:
         return proxy.run_client(command, session.client_env(client), workspace, runner)
