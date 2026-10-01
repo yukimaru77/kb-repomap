@@ -1,7 +1,6 @@
 import io
 import json
 from pathlib import Path
-import re
 import sys
 import tempfile
 import unittest
@@ -76,50 +75,65 @@ class ArgvTests(unittest.TestCase):
 
 
 class CodexResumeTests(Isolated):
-    def run_codex(self, native_args, headers):
+    """Codex --remote resume is stealth-only: kb hands the addon a payload, Codex stays unchanged."""
+
+    def run_codex(self, native_args):
+        import kb_stealth
         seen = {}
 
         def runner(command, env, cwd):
-            seen["command"] = command
-            match = re.search(r'base_url = "(http://127\.0\.0\.1:\d+)"', " ".join(command))
-            if match:
-                post(match.group(1) + "/responses", {"input": [DEV, USER]}, headers)
+            seen["plain"] = command
             return mock.Mock(returncode=0)
 
-        with mock.patch("kb_remote.pool_endpoint", return_value=(self.upstream.url.removesuffix("/backend-api/codex"), "POOLKEY")), \
-             mock.patch.object(kb_resume, "codex_items", return_value=ITEMS) as items, \
-             mock.patch("kb_native.proxy_overrides", side_effect=lambda url, provider=None: [
-                 'model_provider="kb_pool"', f'model_providers.kb_pool={{ base_url = "{url}" }}']), \
-             mock.patch.dict("os.environ", {"KB_CODEX_CONFIG_OVERRIDES": "[]"}):
+        def launch(client, command, payload, workspace, **kwargs):
+            seen.update(client=client, command=command, payload=payload, kwargs=kwargs)
+            return 0
+
+        with mock.patch.object(kb_resume, "codex_items", return_value=ITEMS) as items, \
+             mock.patch.object(kb_stealth, "launch", side_effect=launch), \
+             mock.patch.dict("os.environ", {"KB_REMOTE_MODE": ""}):
             code = kb_resume.resume_codex(native_args, {}, runner=runner)
         return code, seen, items
 
+    def addon_items(self, headers):
+        """What the stealth addon's binder injects for a lazy (unbound) payload."""
+        binder = kb_resume.CodexBinder({}, None, None)
+        with mock.patch.object(kb_resume, "codex_items", return_value=ITEMS):
+            binder.observe_payload(headers, {"input": [DEV, USER]})
+        return binder.items(headers, {})
+
     def test_known_id_injects_current_kb(self):
         proxy.write_binding(SID, "codex", "octane", "pepabo", "latest.json")
-        code, seen, items = self.run_codex(["resume", SID], {"Session-Id": SID})
+        code, seen, items = self.run_codex(["resume", SID])
         self.assertEqual(code, 0)
         self.assertEqual(items.call_args.args[1]["name"], "octane")
-        self.assertEqual(seen["command"][:2], ["codex", "resume"])
-        self.assertEqual(seen["command"][-1], SID)
-        body = json.loads(self.upstream.requests[0]["body"])
-        self.assertEqual(body["input"], [DEV, *ITEMS, USER])
-        self.assertEqual(self.upstream.requests[0]["headers"]["Authorization"], "Bearer POOLKEY")
+        self.assertEqual((seen["client"], seen["command"]), ("codex", ["codex", "resume", SID]))
+        self.assertEqual(seen["payload"]["items"], ITEMS)
+        self.assertEqual(seen["payload"]["record"]["name"], "octane")
+        self.assertNotIn("provider", seen["kwargs"])
 
     def test_unknown_id_launches_plain_codex(self):
-        code, seen, _items = self.run_codex(["resume", SID], {"Session-Id": SID})
+        code, seen, _items = self.run_codex(["resume", SID])
         self.assertEqual(code, 0)
-        self.assertNotIn("base_url", " ".join(seen["command"]))
-        self.assertEqual(self.upstream.requests, [])
+        self.assertEqual(seen["plain"], ["codex", "resume", SID])
+        self.assertNotIn("payload", seen)
         self.assertIn("--remote セッションではない", sys.stderr.getvalue())
 
     def test_interactive_resume_resolves_binding_lazily(self):
         proxy.write_binding(SID, "codex", "octane", None, "latest.json")
-        self.run_codex(["resume"], {"Thread-Id": SID})
-        self.assertEqual(json.loads(self.upstream.requests[0]["body"])["input"], [DEV, *ITEMS, USER])
+        _code, seen, _items = self.run_codex(["resume"])
+        self.assertEqual(seen["payload"], {"client": "codex", "record": None, "items": None})
+        self.assertEqual(self.addon_items({"Thread-Id": SID}), ITEMS)
 
     def test_lazy_unknown_session_is_forwarded_unchanged(self):
-        self.run_codex(["resume", "--last"], {"Thread-Id": OTHER})
-        self.assertEqual(json.loads(self.upstream.requests[0]["body"])["input"], [DEV, USER])
+        proxy.write_binding(SID, "codex", "octane", None, "latest.json")
+        self.assertIsNone(self.addon_items({"Thread-Id": OTHER}))
+
+    def test_provider_mode_is_rejected_for_codex(self):
+        proxy.write_binding(SID, "codex", "octane", "pepabo", "latest.json")
+        with mock.patch.object(kb_resume, "codex_items", return_value=ITEMS), \
+                self.assertRaisesRegex(ValueError, "ステルス方式のみ"):
+            kb_resume.resume_codex(["resume", SID], {}, runner=mock.Mock())
 
 
 class CodexBindingTests(Isolated):

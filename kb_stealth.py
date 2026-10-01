@@ -4,6 +4,7 @@ The client keeps its own settings, provider, base URL and login; only
 HTTPS_PROXY (and, for Claude Code, NODE_EXTRA_CA_CERTS) is added to its
 environment. kb_stealth_addon.py edits the model requests inside mitmdump.
 """
+import contextlib
 from dataclasses import dataclass
 import json
 import os
@@ -22,14 +23,14 @@ import kb_remote_proxy as proxy
 
 ADDON = Path(__file__).resolve().with_name("kb_stealth_addon.py")
 REPO = ADDON.parent
-FALLBACK_MITMDUMP = Path.home() / "projects/codex-account-pool/bridge/.venv/bin/mitmdump"
 ALLOW_HOSTS = r"^(chatgpt\.com|api\.anthropic\.com):443$"
 CA_FILE = "mitmproxy-ca-cert.pem"
 READY_TIMEOUT = 10.0
 MODES = ("provider", "stealth")
 NOT_FOUND = ("Remote KB: mitmdump が見つかりません。--remote はクライアント設定を変えないステルス方式でのみ動作します。\n"
-             "  導入: uv tool install mitmproxy && kb ca-setup\n"
-             "  旧 provider 方式を明示的に使う場合のみ: KB_REMOTE_MODE=provider")
+             "  導入: uv tool install mitmproxy && kb ca-setup")
+PROVIDER_HINT = "旧 provider 方式を明示的に使う場合のみ（Claude Code）: KB_REMOTE_MODE=provider"
+CODEX_STEALTH_ONLY = "Remote KB: Codex の --remote はステルス方式のみです（KB_REMOTE_MODE=provider は Claude Code 専用）"
 TLS_HINT = "Remote KB: クライアントがkbのCAを信頼していないため通信に失敗しました。kb ca-setup を実行してください"
 
 
@@ -52,24 +53,13 @@ def find_mitmdump(env=None):
     # `uv tool install mitmproxy` (what install.sh runs) puts it here even when
     # ~/.local/bin is not on PATH yet.
     home = Path(env.get("HOME") or Path.home())
-    for candidate in (home / ".local/bin/mitmdump", FALLBACK_MITMDUMP):
-        if os.access(candidate, os.X_OK):
-            return str(candidate)
-    return None
+    candidate = home / ".local/bin/mitmdump"
+    return str(candidate) if os.access(candidate, os.X_OK) else None
 
 
 def ca_dir(env=None):
     env = os.environ if env is None else env
     return Path(env.get("KB_CA_DIR") or Path.home() / ".cache/kb/ca").expanduser()
-
-
-def pool_rr(env=None):
-    """pool-rr passes its round-robin provider through KB_CODEX_CONFIG_OVERRIDES."""
-    env = os.environ if env is None else env
-    try:
-        return bool(json.loads(env.get("KB_CODEX_CONFIG_OVERRIDES") or "[]"))
-    except ValueError:
-        return True
 
 
 @dataclass
@@ -80,22 +70,20 @@ class Selection:
 
 
 def select(client, env=None):
-    """Pick stealth or provider mode for one --remote session."""
+    """Pick stealth or (Claude Code only) provider mode for one --remote session."""
     env = os.environ if env is None else env
     wanted = (env.get("KB_REMOTE_MODE") or "").strip().lower()
     if wanted and wanted not in MODES:
         raise ValueError(f"KB_REMOTE_MODE は provider か stealth です: {wanted}")
-    if client == "codex" and pool_rr(env):
-        if wanted == "stealth":
-            notice("Remote KB: pool-rr のため provider 方式で起動します（KB_REMOTE_MODE=stealth は無視）")
-        return Selection("provider")
     if wanted == "provider":
+        if client == "codex":
+            raise ValueError(CODEX_STEALTH_ONLY)
         return Selection("provider", explicit=True)
     mitmdump = find_mitmdump(env)
     if mitmdump is None:
         # No silent fallback: provider mode changes what the client sees, so
         # it must be chosen explicitly with KB_REMOTE_MODE=provider.
-        raise ValueError(NOT_FOUND)
+        raise ValueError(NOT_FOUND if client == "codex" else f"{NOT_FOUND}\n  {PROVIDER_HINT}")
     return Selection("stealth", mitmdump, explicit=wanted == "stealth")
 
 
@@ -201,26 +189,39 @@ class Session:
         self.close()
 
 
-def launch(client, command, payload, workspace, *, provider, describe, runner=None, env=None):
-    """Run `command` in stealth mode when selected, else call provider().
+@contextlib.contextmanager
+def stealth_session(client, payload, env=None, selection=None):
+    """Run one mitmdump for `client` (a Session) while the block is active."""
+    selection = selection or select(client, env)
+    try:
+        session = Session(selection.mitmdump, payload, env)
+    except StealthError as error:
+        hint = "" if client == "codex" else f"\n  {PROVIDER_HINT}"
+        raise ValueError(f"stealth 方式を開始できません: {error}\n  CA/導入の確認: kb ca-setup{hint}") from error
+    with session, _exit_on_termination():
+        yield session
+
+
+def run_client(session, client, command, workspace, runner=None):
+    """Run the client behind `session`, then point at kb ca-setup if its TLS failed."""
+    try:
+        return proxy.run_client(command, session.client_env(client), workspace, runner)
+    finally:
+        if session.tls_failed():
+            notice(TLS_HINT)
+
+
+def launch(client, command, payload, workspace, *, describe, provider=None, runner=None, env=None):
+    """Run `command` in stealth mode when selected, else call provider() (Claude Code only).
 
     describe(port) returns the `Remote KB:` line (without the mode suffix).
     """
     selection = select(client, env)
     if selection.mode == "provider":
         return provider()
-    try:
-        session = Session(selection.mitmdump, payload, env)
-    except StealthError as error:
-        raise ValueError(f"stealth 方式を開始できません: {error}\n"
-                         "  CA/導入の確認: kb ca-setup。旧 provider 方式を明示的に使う場合のみ KB_REMOTE_MODE=provider") from error
-    with session, _exit_on_termination():
+    with stealth_session(client, payload, env, selection) as session:
         notice(f"{describe(session.port)} / stealth")
-        try:
-            return proxy.run_client(command, session.client_env(client), workspace, runner)
-        finally:
-            if session.tls_failed():
-                notice(TLS_HINT)
+        return run_client(session, client, command, workspace, runner)
 
 
 class _exit_on_termination:

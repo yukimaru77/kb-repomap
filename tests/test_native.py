@@ -1,6 +1,5 @@
 import contextlib
 import io
-import json
 import os
 from pathlib import Path
 import tempfile
@@ -11,7 +10,6 @@ import kb_cli
 import kb_codex
 import kb_native
 import kb_native_local
-from kb_remote import RemoteKB
 
 
 class NativeTests(unittest.TestCase):
@@ -54,80 +52,57 @@ class NativeTests(unittest.TestCase):
         self.assertEqual((args.name, args.remote, args.store, args.file), ("example", True, "research", "v2.json"))
         self.assertEqual(args.rebuild, "never")
 
-    def test_remote_rr_runs_native_codex_through_kb_proxy(self):
+    def remote_launch(self, environ=None):
+        import kb_stealth
         args = kb_native.parse(["example", "--remote", "codex", "exec", "--json", "-"])
         loaded = {"store": {"name": "research"}, "jsonl": Path("snapshot.json"),
                   "info": {"repository_url": "repo", "source_commit": "a" * 40, "branch": "main"}}
-        remote = mock.Mock(origin="http://127.0.0.1:18473", key="SECRET", items=[{"type": "compaction"}])
-        overrides = ['model_provider="pool_rr"',
-                     'model_providers.pool_rr={name="Pool",base_url="http://127.0.0.1:18473/_pool/rr",env_key="RR"}']
+        remote = mock.Mock(items=[{"type": "compaction"}])
         output, diagnostics = io.StringIO(), io.StringIO()
-        seen = {}
-
-        def runner(command, env, cwd):
-            seen.update(command=command, env=env, cwd=cwd)
-            return mock.Mock(returncode=3)
-
-        with mock.patch.dict(os.environ, {"KB_CODEX_CONFIG_OVERRIDES": json.dumps(overrides)}), \
+        with mock.patch.dict(os.environ, environ or {}), \
              mock.patch.object(kb_cli.store, "find_kb", return_value=loaded), \
              mock.patch.object(kb_cli.store, "source_update", return_value=("a" * 40, "")), \
              mock.patch.object(kb_native, "RemoteKB", return_value=remote), \
-             mock.patch.object(kb_native.proxy, "start", wraps=kb_native.proxy.start) as start, \
-             mock.patch.object(kb_native.subprocess, "run", side_effect=runner), \
+             mock.patch.object(kb_stealth, "find_mitmdump", return_value="/bin/mitmdump"), \
+             mock.patch.object(kb_stealth, "Session") as session, \
+             mock.patch.object(kb_native.proxy, "start") as provider_proxy, \
              mock.patch.object(kb_codex, "CodexAppServer") as server, \
              contextlib.redirect_stdout(output), contextlib.redirect_stderr(diagnostics):
-            code = kb_cli.launch(args, {})
-        self.assertEqual(code, 3)
+            session.return_value.__enter__.return_value = session.return_value
+            session.return_value.port = 7
+            session.return_value.client_env.return_value = {"HTTPS_PROXY": "http://127.0.0.1:7"}
+            session.return_value.tls_failed.return_value = False
+            with mock.patch.object(kb_stealth.proxy, "run_client", return_value=3) as run_client:
+                code = kb_cli.launch(args, {})
         server.assert_not_called()
-        remote.bind.assert_not_called()
-        self.assertEqual(start.call_args.args[1], "http://127.0.0.1:18473/_pool/rr")
-        self.assertEqual(start.call_args.kwargs["set_headers"], {"Authorization": "Bearer SECRET"})
-        command = seen["command"]
-        self.assertEqual(command[:2], ["codex", "exec"])
-        self.assertEqual(command[-2:], ["--json", "-"])
-        joined = " ".join(command)
-        self.assertRegex(joined, r'model_providers\.pool_rr\.base_url="http://127\.0\.0\.1:\d+"')
-        self.assertIn('model_providers.pool_rr.env_key="KB_NATIVE_POOL_KEY"', command)
-        self.assertIn("model_providers.pool_rr.supports_websockets=false", command)
-        self.assertNotIn("SECRET", joined)
-        self.assertEqual(seen["env"]["KB_NATIVE_POOL_KEY"], kb_native.PROXY_KEY)
-        self.assertEqual(output.getvalue(), "")
-        self.assertIn("KB: example", diagnostics.getvalue())
+        provider_proxy.assert_not_called()
+        return code, session, run_client, output.getvalue(), diagnostics.getvalue()
+
+    def test_remote_runs_native_codex_unchanged_behind_stealth(self):
+        code, session, run_client, output, diagnostics = self.remote_launch()
+        self.assertEqual(code, 3)
+        mitmdump, payload, _env = session.call_args.args
+        self.assertEqual(mitmdump, "/bin/mitmdump")
+        self.assertEqual(payload["client"], "codex")
+        self.assertEqual(payload["items"], [{"type": "compaction"}])
+        self.assertEqual(payload["record"]["name"], "example")
+        command, env = run_client.call_args.args[:2]
+        # Codex keeps its own provider and login: no -c overrides, only the proxy env.
+        self.assertEqual(command, ["codex", "exec", "--json", "-"])
+        self.assertEqual(env, {"HTTPS_PROXY": "http://127.0.0.1:7"})
+        self.assertEqual(output, "")
+        self.assertIn("KB: example", diagnostics)
+        self.assertIn("/ stealth", diagnostics)
+
+    def test_codex_rejects_provider_mode(self):
+        with self.assertRaisesRegex(ValueError, "Codex の --remote はステルス方式のみ"):
+            self.remote_launch({"KB_REMOTE_MODE": "provider"})
 
     def test_remote_exit_code_propagates_from_cli(self):
         with mock.patch.object(kb_cli.store, "read_config", return_value={}), \
              mock.patch.object(kb_cli, "launch", return_value=5), self.assertRaises(SystemExit) as caught:
             kb_cli.main(["example", "--remote", "codex", "exec", "hi"])
         self.assertEqual(caught.exception.code, 5)
-
-    def test_normal_remote_uses_fill_first_without_persistent_config(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            cache = Path(temporary) / "models_cache.json"
-            cache.write_text('{"models": []}')
-            with mock.patch.dict(os.environ, {"CODEX_HOME": temporary, "KB_CODEX_CONFIG_OVERRIDES": "[]"}):
-                self.assertEqual(kb_native.pool_upstream("http://127.0.0.1:18473"),
-                                 (None, "http://127.0.0.1:18473/backend-api/codex"))
-                command, env = kb_native.remote_command(["review", "--uncommitted"], "http://127.0.0.1:9")
-            self.assertEqual(command[:2], ["codex", "review"])
-            self.assertEqual(command[-1], "--uncommitted")
-            self.assertIn('base_url = "http://127.0.0.1:9"', " ".join(command))
-            self.assertIn("supports_websockets = false", " ".join(command))
-            self.assertNotIn("/_pool/rr", " ".join(command))
-            self.assertEqual(env["KB_NATIVE_POOL_KEY"], kb_native.PROXY_KEY)
-            self.assertEqual(list(Path(temporary).iterdir()), [cache])
-
-    def test_wrapper_pool_environment_wins_over_saved_build_settings(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            key = root / "key"
-            key.write_text("new-key")
-            snapshot = root / "kb.json"
-            snapshot.write_text('[{"type":"compaction","encrypted_content":"blob"}]')
-            with mock.patch.dict(os.environ, {"KB_POOL_ORIGIN": "http://127.0.0.1:9001",
-                                             "KB_POOL_KEY_FILE": str(key), "KB_POOL_PRIVATE_HTTP": "0"}):
-                remote = RemoteKB({"build_args": ["--origin", "http://other.invalid:9000", "--key-file", "/missing", "--private-http"]}, snapshot)
-            self.assertEqual(remote.origin, "http://127.0.0.1:9001")
-            self.assertEqual(remote.key, "new-key")
 
     def test_native_help_does_not_load_kb_or_start_session(self):
         with mock.patch.object(kb_cli.store, "read_config") as read, \

@@ -11,7 +11,7 @@ import kb_cli
 import kb_codex
 import kb_native
 import kb_native_local
-import kb_remote
+import kb_stealth
 import kb_store
 from kb_items import DEFAULT_DEVELOPER_TEXT, developer_item, dump_items, load_session_items
 
@@ -258,21 +258,20 @@ class StoreDeveloperTests(unittest.TestCase):
             server = constructor.return_value.__enter__.return_value
             server.start.return_value = "new-thread"
             stack.enter_context(mock.patch.object(kb_codex, "config_flags", return_value=[]))
-            stack.enter_context(mock.patch.object(kb_remote, "rr_configuration",
-                                                 return_value=("http://127.0.0.1:12345/_pool/rr", "test-key")))
-            # kb's own proxy receives the remote items; capture what it would insert.
-            stack.enter_context(mock.patch.dict(os.environ, {"KB_REMOTE_MODE": "provider"}))
-            def start_proxy(remote, items, on_request=None):
-                bound.extend(items)
-                return mock.MagicMock(url="http://127.0.0.1:1", port=1), None
+            # kb's stealth proxy receives the remote items; capture what it would insert.
+            stack.enter_context(mock.patch.dict(os.environ, {"KB_REMOTE_MODE": ""}))
+            def session(_mitmdump, payload, _env=None):
+                bound.extend(payload["items"])
+                running = mock.MagicMock(port=1)
+                running.__enter__.return_value = running
+                running.tls_failed.return_value = False
+                return running
 
-            stack.enter_context(mock.patch.object(kb_native, "start_proxy", side_effect=start_proxy))
-            stack.enter_context(mock.patch.object(kb_native, "proxy_overrides", return_value=[]))
+            stack.enter_context(mock.patch.object(kb_stealth, "find_mitmdump", return_value="/bin/mitmdump"))
+            stack.enter_context(mock.patch.object(kb_stealth, "Session", side_effect=session))
             stack.enter_context(mock.patch.object(kb_native.proxy, "run_client", return_value=0))
             bindings = stack.enter_context(tempfile.TemporaryDirectory())
             stack.enter_context(mock.patch.object(kb_native.proxy, "BINDINGS", Path(bindings)))
-            stack.enter_context(mock.patch.object(kb_native, "remote_command",
-                                                 return_value=(["codex", "exec", "hello"], {})))
             stack.enter_context(mock.patch.object(kb_native_local, "command",
                                                  return_value=["codex", "exec", "resume", "new-thread", "hello"]))
             stack.enter_context(mock.patch.object(kb_native_local, "seed_overrides", return_value=[]))

@@ -10,7 +10,6 @@ from pathlib import Path
 import re
 import sys
 import threading
-from types import SimpleNamespace
 
 import kb_remote_proxy as proxy
 import kb_store as store
@@ -161,7 +160,6 @@ class CodexBinder:
 def resume_codex(native_args, config, *, runner=None):
     import kb_codex
     import kb_native
-    from kb_remote import pool_endpoint
     is_resume, session_id = codex_resume_id(native_args)
     if not is_resume:
         raise ValueError("kb --remote codex はセッションの再開専用です: kb --remote codex resume [ID]。"
@@ -176,11 +174,7 @@ def resume_codex(native_args, config, *, runner=None):
             return proxy.run_client(command, dict(os.environ), workspace, runner)
         notice(f"KB: {record['name']}/{record['file']} (binding {session_id}) の最新内容を挿入して再開します")
         binder = CodexBinder(config, record, codex_items(config, record))
-    def remote():
-        origin, key = pool_endpoint(config)
-        return SimpleNamespace(origin=origin, key=key)
-
-    return kb_native.launch_remote(native_args, binder, workspace, remote, runner=runner)
+    return kb_native.launch_remote(native_args, binder, workspace, runner=runner)
 
 
 # --- Claude ---------------------------------------------------------------

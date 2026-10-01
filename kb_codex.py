@@ -3,24 +3,20 @@
 Copyright (c) 2026 GMO Pepabo, Inc. See LICENSE.kb-cli.
 """
 import json
-import os
 import subprocess
 from kb_items import developer_item, load_session_items
 
 
 def config_flags(overrides=()):
-    """Process-scoped options from pool-rr, followed by the caller's options."""
-    inherited = json.loads(os.environ.get("KB_CODEX_CONFIG_OVERRIDES", "[]"))
-    if not isinstance(inherited, list) or any(not isinstance(value, str) or "=" not in value for value in inherited):
-        raise ValueError("KB_CODEX_CONFIG_OVERRIDES must be a JSON array of key=value strings")
-    return [part for value in [*inherited, *overrides] for part in ("-c", value)]
+    """The caller's per-invocation config options as Codex -c flags."""
+    return [part for value in overrides for part in ("-c", value)]
 
 
 class CodexAppServer:
-    def __init__(self, overrides=()):
+    def __init__(self, overrides=(), env=None):
         self.process = subprocess.Popen(
             ["codex", "app-server", *config_flags(overrides), "--listen", "stdio://"],
-            stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True, bufsize=1,
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True, bufsize=1, env=env,
         )
         self.next_id = 0
         self.request("initialize", {
@@ -104,12 +100,12 @@ class CodexAppServer:
 
 
 # Persisted only to create a resumable rollout for a remote-KB thread when there
-# is no update context; the KB itself is inserted by kb's proxy per request.
+# is no update context; the KB itself is inserted per request by kb's stealth proxy.
 REMOTE_SEED_TEXT = "This thread uses a remote KB; its material is supplied at inference time."
 
 
 def start_session(jsonl, workspace, name, update_context, *, full_access=True, prompt=None, remote=None,
-                  run_initial_turn=None, overrides=(), developer_text=None):
+                  run_initial_turn=None, overrides=(), developer_text=None, env=None):
     # Seeding a resumable session does not itself constitute a user request.
     run_initial_turn = prompt is not None and run_initial_turn is not False
     context_items = []
@@ -122,7 +118,7 @@ def start_session(jsonl, workspace, name, update_context, *, full_access=True, p
         # thread/start may open a prewarm socket before returning its ID.
         # Register, persist the new empty thread, then close this app-server so
         # the first user turn opens a socket with the binding already in place.
-        with (CodexAppServer(overrides) if overrides else CodexAppServer()) as bootstrap:
+        with (CodexAppServer(overrides, env=env) if overrides or env else CodexAppServer()) as bootstrap:
             session_id = bootstrap.start(workspace, full_access)
             remote.bind(session_id)
             # Naming an empty thread only updates its index; it does not create
@@ -136,7 +132,7 @@ def start_session(jsonl, workspace, name, update_context, *, full_access=True, p
             bootstrap.request("thread/name/set", {"threadId": session_id, "name": f"{name} Remote KBを活用する"})
         if not run_initial_turn:
             return session_id
-    with (CodexAppServer(overrides) if overrides else CodexAppServer()) as server:
+    with (CodexAppServer(overrides, env=env) if overrides or env else CodexAppServer()) as server:
         if remote is None:
             session_id = server.start(workspace, full_access)
             server.request("thread/inject_items", {"threadId": session_id, "items": items})

@@ -1,4 +1,5 @@
 """kb_stealth launcher: mode selection, child env, and mitmdump lifetime (fake mitmdump)."""
+import contextlib
 import io
 import json
 import os
@@ -9,6 +10,7 @@ import stat
 import sys
 import tempfile
 import time
+from types import SimpleNamespace
 import unittest
 from unittest import mock
 
@@ -57,7 +59,6 @@ class FakeMitmdump(unittest.TestCase):
         self.env = {"PATH": f"{bin_dir}:/usr/bin:/bin", "FAKE_MITM_RECORD": str(self.record),
                     "KB_CA_DIR": str(self.dir / "ca"), "HOME": str(self.dir)}
         for patcher in (mock.patch.object(proxy, "BINDINGS", self.dir / "bindings"),
-                        mock.patch.object(kb_stealth, "FALLBACK_MITMDUMP", self.dir / "absent"),
                         mock.patch("sys.stderr", new_callable=io.StringIO)):
             patcher.start()
             self.addCleanup(patcher.stop)
@@ -98,7 +99,7 @@ class LauncherTests(FakeMitmdump):
         port = argv[argv.index("-p") + 1]
         self.assertEqual(seen["env"]["HTTPS_PROXY"], f"http://127.0.0.1:{port}")
         self.assertNotIn("NODE_EXTRA_CA_CERTS", seen["env"])
-        for name in ("ANTHROPIC_BASE_URL", "ENABLE_TOOL_SEARCH", "KB_NATIVE_POOL_KEY"):
+        for name in ("ANTHROPIC_BASE_URL", "ENABLE_TOOL_SEARCH"):
             self.assertNotIn(name, seen["env"])
         self.assertEqual(seen["command"], ["codex", "-p", "hi"])
         self.assertNotIn("model_provider", " ".join(seen["command"]))
@@ -150,21 +151,24 @@ class LauncherTests(FakeMitmdump):
         env = dict(self.env, PATH="/usr/bin:/bin")
         with self.assertRaisesRegex(ValueError, "uv tool install mitmproxy") as caught:
             self.launch("codex", env)
-        self.assertIn("KB_REMOTE_MODE=provider", str(caught.exception))
+        # Codex has no provider mode to point at; Claude Code keeps the explicit opt-in.
+        self.assertNotIn("KB_REMOTE_MODE=provider", str(caught.exception))
+        with self.assertRaisesRegex(ValueError, "KB_REMOTE_MODE=provider"):
+            self.launch("claude", env)
 
     def test_explicit_stealth_without_mitmdump_is_an_error(self):
         with self.assertRaisesRegex(ValueError, "mitmdump"):
             self.launch("codex", dict(self.env, PATH="/usr/bin:/bin", KB_REMOTE_MODE="stealth"))
 
-    def test_mode_override_and_pool_rr(self):
+    def test_mode_override(self):
         code, seen = self.launch("claude", dict(self.env, KB_REMOTE_MODE="provider"))
         self.assertEqual((code, seen["provider"]), (9, True))
         self.assertFalse(self.record.exists())
-        rr = json.dumps(['model_provider="pool_rr"'])
-        code, seen = self.launch("codex", dict(self.env, KB_CODEX_CONFIG_OVERRIDES=rr))
-        self.assertTrue(seen["provider"])
-        # pool-rr only concerns Codex; an empty override list is not pool-rr.
-        _code, seen = self.launch("codex", dict(self.env, KB_CODEX_CONFIG_OVERRIDES="[]"))
+        with self.assertRaisesRegex(ValueError, "Codex の --remote はステルス方式のみ"):
+            self.launch("codex", dict(self.env, KB_REMOTE_MODE="provider"))
+        self.assertFalse(self.record.exists())
+        # Codex config overrides in the environment no longer change the mode.
+        _code, seen = self.launch("codex", dict(self.env, KB_CODEX_CONFIG_OVERRIDES='["model_provider=\\"x\\""]'))
         self.assertFalse(seen["provider"])
         with self.assertRaisesRegex(ValueError, "KB_REMOTE_MODE"):
             kb_stealth.select("codex", dict(self.env, KB_REMOTE_MODE="bogus"))
@@ -182,15 +186,13 @@ class LauncherTests(FakeMitmdump):
         other.chmod(0o755)
         self.assertEqual(kb_stealth.find_mitmdump(dict(self.env, KB_MITMDUMP=str(other))), str(other))
         self.assertEqual(kb_stealth.find_mitmdump(self.env), str(self.fake))
-        with mock.patch.object(kb_stealth, "FALLBACK_MITMDUMP", other):
-            self.assertEqual(kb_stealth.find_mitmdump({"PATH": "/usr/bin:/bin", "HOME": str(self.dir)}), str(other))
+        self.assertIsNone(kb_stealth.find_mitmdump({"PATH": "/usr/bin:/bin", "HOME": str(self.dir)}))
         # uv tool install puts it in ~/.local/bin even when that is not on PATH yet.
         local = self.dir / ".local/bin/mitmdump"
         local.parent.mkdir(parents=True)
         local.write_text("#!/bin/sh\n")
         local.chmod(0o755)
-        with mock.patch.object(kb_stealth, "FALLBACK_MITMDUMP", other):
-            self.assertEqual(kb_stealth.find_mitmdump({"PATH": "/usr/bin:/bin", "HOME": str(self.dir)}), str(local))
+        self.assertEqual(kb_stealth.find_mitmdump({"PATH": "/usr/bin:/bin", "HOME": str(self.dir)}), str(local))
 
     def test_tls_failure_hint_after_child_exit(self):
         def runner(command, env, cwd):
@@ -256,11 +258,9 @@ class WiringTests(FakeMitmdump):
         import kb_resume
         proxy.write_binding(self.SID, "codex", "octane", "pepabo", "latest.json")
         items = [{"type": "compaction", "encrypted_content": "KB"}]
-        with mock.patch.object(kb_resume, "codex_items", return_value=items), \
-             mock.patch("kb_remote.pool_endpoint") as endpoint:
+        with mock.patch.object(kb_resume, "codex_items", return_value=items):
             code = kb_resume.resume_codex(["resume", self.SID], {}, runner=self.runner)
         self.assertEqual(code, 4)
-        endpoint.assert_not_called()
         self.assertEqual(self.seen["command"], ["codex", "resume", self.SID])
         self.assertEqual(self.seen["payload"]["items"], items)
         self.assertEqual(self.seen["payload"]["record"]["name"], "octane")
@@ -285,6 +285,31 @@ class WiringTests(FakeMitmdump):
         self.assertEqual(self.seen["command"], ["codex", "exec", "hi"])
         self.assertEqual(self.seen["payload"]["record"]["name"], "example")
         self.assertEqual(self.seen["payload"]["items"], [{"type": "compaction"}])
+
+    def test_legacy_codex_remote_seeds_and_resumes_behind_one_stealth_proxy(self):
+        import kb_codex
+        import kb_native
+        args = SimpleNamespace(name="example", store="pepabo", file="latest.json", no_yolo=True, prompt=None,
+                               session_only=False, app=False)
+        remote = mock.Mock(items=[{"type": "compaction"}])
+        seeded = {}
+
+        def start_session(*_args, env, **kwargs):
+            seeded.update(env=env, payload=json.loads(self.record.read_text())["payload"], kwargs=kwargs)
+            return self.SID
+
+        with mock.patch.object(kb_native, "RemoteKB", return_value=remote), \
+             mock.patch.object(kb_codex, "start_session", side_effect=start_session), \
+             mock.patch.object(kb_native.proxy, "run_client",
+                               side_effect=lambda c, e, w, r=None: self.runner(c, e, w).returncode), \
+             contextlib.redirect_stdout(io.StringIO()):
+            code = kb_native.run_legacy_remote(args, {}, Path("kb.json"), self.dir, "")
+        self.assertEqual(code, 4)
+        self.assertEqual(seeded["env"]["HTTPS_PROXY"], self.seen["env"]["HTTPS_PROXY"])
+        self.assertEqual(seeded["payload"]["items"], [{"type": "compaction"}])
+        self.assertEqual(seeded["payload"]["record"], {"name": "example", "store": "pepabo", "file": "latest.json"})
+        self.assertNotIn("overrides", seeded["kwargs"])
+        self.assertEqual(self.seen["command"], ["codex", "resume", "-C", str(self.dir), self.SID])
 
     def test_claude_resume_known_id(self):
         import kb_resume
