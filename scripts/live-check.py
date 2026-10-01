@@ -1,12 +1,11 @@
 #!/usr/bin/env python3
 """Small opt-in live check: two native blobs -> one native blob -> recall.
 
-Makes four inference/compaction calls. Uses only synthetic source and the pool
-client key. Does not read or change Codex settings, credentials, or sessions.
+Makes four inference/compaction calls. Uses only synthetic source and the RR
+endpoint key. Does not read or change Codex settings, credentials, or sessions.
 """
 import argparse
 import json
-import os
 from pathlib import Path, PurePosixPath
 import secrets
 import sys
@@ -19,17 +18,13 @@ from kb_repo import blob_source
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--origin", required=True)
-    parser.add_argument("--key-file", required=True)
-    parser.add_argument("--private-http", action="store_true")
+    kb_api.add_rr_arguments(parser)
     parser.add_argument("--model", default=kb_api.DEFAULT_MODEL)
     parser.add_argument("--effort", default=kb_api.DEFAULT_EFFORT)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
-    os.environ["KB_POOL_ORIGIN"] = args.origin
-    os.environ["KB_POOL_KEY_FILE"] = args.key_file
-    if args.private_http:
-        os.environ["KB_POOL_PRIVATE_HTTP"] = "1"
+    kb_api.apply_rr_arguments(args)
+    kb_api.rr_configuration()
     markers = ["KB_ALPHA_" + secrets.token_hex(6), "KB_BETA_" + secrets.token_hex(6)]
     blobs = []
     measurements = []

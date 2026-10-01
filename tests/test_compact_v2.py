@@ -188,11 +188,11 @@ class CompactV2Test(unittest.TestCase):
             self.assertEqual(request.call_count, 1)
             sleep.assert_not_called()
 
-    def test_pool_client_auth_and_rr_route_without_codex_auth(self):
+    def test_rr_key_auth_and_base_url_without_codex_auth(self):
         with tempfile.TemporaryDirectory() as temp:
             key = Path(temp) / "client.key"
             key.write_text("test-key\n")
-            settings = {"KB_POOL_ORIGIN": "http://localhost:1234", "KB_POOL_KEY_FILE": str(key)}
+            settings = {"KB_RR_BASE_URL": "http://localhost:1234/any/base", "KB_RR_KEY_FILE": str(key)}
             opener = mock.Mock()
             opener.open.return_value = success()
             with mock.patch.dict(kb_api.os.environ, settings, clear=True), \
@@ -200,14 +200,14 @@ class CompactV2Test(unittest.TestCase):
                 with kb_api.http("/responses", {}, stream=True) as response:
                     kb_api.compaction_result(response)
             request = opener.open.call_args.args[0]
-            self.assertEqual(request.full_url, "http://localhost:1234/_pool/rr/responses")
+            self.assertEqual(request.full_url, "http://localhost:1234/any/base/responses")
             self.assertEqual(request.get_header("Authorization"), "Bearer test-key")
             self.assertIsNone(request.get_header("Chatgpt-account-id"))
 
-    def test_missing_pool_configuration_never_reads_codex_auth(self):
+    def test_missing_rr_configuration_never_reads_codex_auth(self):
         with mock.patch("pathlib.Path.read_text") as read:
             with self.assertRaises(ValueError):
-                kb_api.pool_configuration({})
+                kb_api.rr_configuration({})
             read.assert_not_called()
 
 

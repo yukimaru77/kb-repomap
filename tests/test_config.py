@@ -59,7 +59,7 @@ class ConfigTest(unittest.TestCase):
                         mock.patch.object(kb_repo_url.sys, "argv", argv), \
                         mock.patch.object(kb_repo_url, "clone_repository"), \
                         mock.patch.object(kb_repo_url.subprocess, "check_output", return_value="HEAD\n"), \
-                        mock.patch.object(kb_repo_url.kb_api, "pool_configuration"), \
+                        mock.patch.object(kb_repo_url.kb_api, "rr_configuration"), \
                         mock.patch.object(kb_repo_url, "run") as run:
                     kb_repo_url.main()
                 commands = [call.args[0] for call in run.call_args_list]

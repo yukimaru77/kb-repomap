@@ -13,6 +13,7 @@ import uuid
 import kb_codex
 import kb_store as store
 from kb_items import DEFAULT_DEVELOPER_TEXT, dump_items, load_items
+import kb_api
 from kb_api import COMPACTION_TYPES
 from kb_fork_mint import CHARTER
 from kb_source import source_address
@@ -395,7 +396,7 @@ def main(argv=None):
     decrypt_command = commands.add_parser("decrypt", help="blob数Nなら各波を2N並列で復元し、±2%%以内のblobは打ち切る")
     decrypt_command.add_argument("name", type=store.name_value)
     decrypt_command.add_argument("--store")
-    decrypt_command.add_argument("--pool-config", help="号池の接続JSON。省略時は build_args / KB_POOL_*")
+    kb_api.add_rr_arguments(decrypt_command)
     commands.add_parser("ca-setup", help="--remote のstealth方式で使うCAの場所と信頼登録の手順を表示")
     codex = commands.add_parser("codex", help="KBを取得して新規Codexセッションを起動")
     codex.add_argument("name", type=store.name_value)

@@ -141,8 +141,8 @@ class DecryptCommandTest(unittest.TestCase):
         key.write_text("test-key")
         kb_store.write_config({"stores": [self.store], "build_args": []})
         self.env = mock.patch.dict(os.environ, {
-            "KB_POOL_ORIGIN": f"http://127.0.0.1:{self.server.server_port}",
-            "KB_POOL_KEY_FILE": str(key),
+            "KB_RR_BASE_URL": f"http://127.0.0.1:{self.server.server_port}/_pool/rr",
+            "KB_RR_KEY_FILE": str(key),
         })
         self.env.start()
         self.addCleanup(self.env.stop)

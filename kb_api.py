@@ -19,53 +19,131 @@ CHARTER = ("あなたはKB(知識ベース)である。与えられる文書を�
            "要約を求められたら核心を落とさない。")
 INTRO = "今からあなたに文書群を渡すので、全て精読してください。"
 
-def pool_config_defaults(path):
-    """Read shared connection settings afresh; paths belong to that JSON file."""
+LEGACY_RR_PATH = "/_pool/rr"  # deprecated KB_POOL_ORIGIN/origin: base URL = origin + this
+
+
+def rr_config_defaults(path):
+    """Read shared RR endpoint settings afresh; paths belong to that JSON file.
+
+    {"base_url", "key_file", "private_http"}; the deprecated KB_POOL_CONFIG
+    shape {"origin", "key_file"|"state_dir", "private_http"} is also accepted.
+    """
     path = Path(path).expanduser().resolve()
     try:
         data = json.loads(path.read_text())
     except (OSError, ValueError) as error:
-        raise ValueError(f"failed to read pool config {path}: {error}") from error
+        raise ValueError(f"failed to read RR endpoint config {path}: {error}") from error
     if not isinstance(data, dict):
-        raise ValueError("pool config must be a JSON object")
-    for field in ("origin", "key_file", "state_dir"):
+        raise ValueError("RR endpoint config must be a JSON object")
+    for field in ("base_url", "origin", "key_file", "state_dir"):
         if field in data and not isinstance(data[field], str):
-            raise ValueError(f"pool config {field} must be a string")
+            raise ValueError(f"RR endpoint config {field} must be a string")
     if "private_http" in data and not isinstance(data["private_http"], bool):
-        raise ValueError("pool config private_http must be true or false")
-    key_path = Path(data.get("key_file") or str(Path(data.get("state_dir") or "state") / "client.key")).expanduser()
-    if not key_path.is_absolute():
-        key_path = path.parent / key_path
-    return {"KB_POOL_ORIGIN": data.get("origin", ""),
-            "KB_POOL_KEY_FILE": str(key_path),
-            "KB_POOL_PRIVATE_HTTP": "1" if data.get("private_http", False) else "0"}
+        raise ValueError("RR endpoint config private_http must be true or false")
+    if data.get("base_url"):
+        base_url, key_file = data["base_url"], data.get("key_file", "")
+    else:
+        base_url = legacy_base_url(data.get("origin", ""))
+        key_file = data.get("key_file") or str(Path(data.get("state_dir") or "state") / "client.key")
+    if key_file:
+        key_path = Path(key_file).expanduser()
+        key_file = str(key_path if key_path.is_absolute() else path.parent / key_path)
+    return {"base_url": base_url, "key_file": key_file,
+            "private_http": "1" if data.get("private_http", False) else "0"}
 
 
-def pool_configuration(environ=None):
-    environ = os.environ if environ is None else environ
+def legacy_base_url(origin):
+    origin = (origin or "").rstrip("/")
+    return origin + LEGACY_RR_PATH if origin else ""
+
+
+def _rr_layers(environ):
+    """Settings from lowest to highest precedence: old JSON, old fields, new JSON, new fields."""
+    layers = []
     if environ.get("KB_POOL_CONFIG"):
-        # Explicit environment/CLI fields override the shared JSON. Do not cache:
-        # a later compact call must observe a changed bridge origin or key path.
-        environ = {**pool_config_defaults(environ["KB_POOL_CONFIG"]), **environ}
-    origin = environ.get("KB_POOL_ORIGIN", "").rstrip("/")
-    key_file = environ.get("KB_POOL_KEY_FILE", "")
-    if not origin or not key_file:
-        raise ValueError("set KB_POOL_CONFIG/--pool-config, or KB_POOL_ORIGIN and KB_POOL_KEY_FILE (--origin and --key-file)")
-    parsed = urlparse(origin)
+        layers.append(rr_config_defaults(environ["KB_POOL_CONFIG"]))
+    layers.append({"base_url": legacy_base_url(environ.get("KB_POOL_ORIGIN")),
+                   "key_file": environ.get("KB_POOL_KEY_FILE"),
+                   "private_http": environ.get("KB_POOL_PRIVATE_HTTP")})
+    if environ.get("KB_RR_CONFIG"):
+        layers.append(rr_config_defaults(environ["KB_RR_CONFIG"]))
+    layers.append({"base_url": environ.get("KB_RR_BASE_URL"),
+                   "key_file": environ.get("KB_RR_KEY_FILE"),
+                   "private_http": environ.get("KB_RR_PRIVATE_HTTP")})
+    return layers
+
+
+def rr_configuration(environ=None):
+    """Return (RR base URL, key). kb sends `/responses` under the base URL verbatim.
+
+    Do not cache: a later compact call must observe a changed endpoint or key path.
+    """
+    environ = os.environ if environ is None else environ
+    settings = {}
+    for layer in _rr_layers(environ):
+        settings.update({name: value for name, value in layer.items() if value})
+    base_url = settings.get("base_url", "").rstrip("/")
+    key_file = settings.get("key_file", "")
+    if not base_url or not key_file:
+        raise ValueError("RR endpoint is not configured: set KB_RR_CONFIG/--rr-config, "
+                         "or KB_RR_BASE_URL and KB_RR_KEY_FILE (--rr-base-url and --rr-key-file)")
+    parsed = urlparse(base_url)
     if (parsed.scheme not in {"http", "https"} or not parsed.hostname
             or parsed.username is not None or parsed.password is not None
-            or parsed.path or parsed.query or parsed.fragment):
-        raise ValueError("pool origin must be http(s), without a path or embedded credentials")
+            or parsed.query or parsed.fragment):
+        raise ValueError("RR endpoint base URL must be http(s), without a query or embedded credentials")
     try:
         local = ipaddress.ip_address(parsed.hostname).is_loopback
     except ValueError:
         local = parsed.hostname == "localhost"
-    if parsed.scheme == "http" and not local and environ.get("KB_POOL_PRIVATE_HTTP") != "1":
-        raise ValueError("remote HTTP requires --private-http for a verified private tunnel")
+    if parsed.scheme == "http" and not local and settings.get("private_http") != "1":
+        raise ValueError("remote HTTP RR endpoint requires --rr-private-http for a verified private tunnel")
     key = Path(key_file).expanduser().read_text().strip()
     if not key or any(character.isspace() for character in key):
-        raise ValueError("pool key file must contain a nonempty single token")
-    return origin + "/_pool/rr", key
+        raise ValueError("RR endpoint key file must contain a nonempty single token")
+    return base_url, key
+
+
+def check_rr_config(environ=None):
+    """Planning needs no key or API, but an explicitly named config must exist."""
+    environ = os.environ if environ is None else environ
+    for name in ("KB_POOL_CONFIG", "KB_RR_CONFIG"):
+        if environ.get(name):
+            rr_config_defaults(environ[name])
+
+
+def add_rr_arguments(parser, *, help=True):
+    """The RR endpoint options; the --pool-config/--origin/... spellings are deprecated aliases."""
+    def text(value):
+        return value if help else argparse.SUPPRESS
+    parser.add_argument("--rr-config", "--pool-config", dest="rr_config",
+                        help=text("RR endpoint JSON {base_url, key_file, private_http}; or KB_RR_CONFIG"))
+    parser.add_argument("--rr-base-url", help=text("RR endpoint base URL (kb appends /responses); or KB_RR_BASE_URL"))
+    parser.add_argument("--origin", help=argparse.SUPPRESS)  # deprecated: base URL = origin + /_pool/rr
+    parser.add_argument("--rr-key-file", "--key-file", dest="rr_key_file",
+                        help=text("RR endpoint key file; or KB_RR_KEY_FILE"))
+    parser.add_argument("--rr-private-http", "--private-http", dest="rr_private_http", action="store_true",
+                        help=text("the http base URL is inside a verified private tunnel"))
+
+
+def apply_rr_arguments(args, environ=None, *, override=True, resolve=True):
+    """Export parsed RR options as KB_RR_* (override=False keeps what is already set)."""
+    environ = os.environ if environ is None else environ
+    path = (lambda value: str(Path(value).expanduser().resolve())) if resolve else (lambda value: value)
+    values = {}
+    if getattr(args, "rr_config", None) is not None:
+        values["KB_RR_CONFIG"] = path(args.rr_config)
+    if getattr(args, "rr_base_url", None) or getattr(args, "origin", None):
+        values["KB_RR_BASE_URL"] = args.rr_base_url or legacy_base_url(args.origin)
+    if getattr(args, "rr_key_file", None):
+        values["KB_RR_KEY_FILE"] = path(args.rr_key_file)
+    if getattr(args, "rr_private_http", False):
+        values["KB_RR_PRIVATE_HTTP"] = "1"
+    for name, value in values.items():
+        if override:
+            environ[name] = value
+        else:
+            environ.setdefault(name, value)
 
 
 class NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -74,10 +152,10 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
 
 
 def http(path, body, timeout=600, stream=False):
-    base_url, api_key = pool_configuration()
+    base_url, api_key = rr_configuration()
     request = urllib.request.Request(
         base_url + path, data=json.dumps(body, ensure_ascii=False).encode(),
-        # Codex User-Agent/originator are supplied by the pool's route headers.
+        # Any Codex User-Agent/originator headers are the RR endpoint's concern.
         headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json",
                  "Accept": "text/event-stream" if stream else "application/json"},
         method="POST",
@@ -218,7 +296,7 @@ def compact(items, model=DEFAULT_MODEL, effort=DEFAULT_EFFORT,
         except urllib.error.HTTPError as error:
             if error.code == 401:
                 error.close()
-                raise RuntimeError("pool authentication rejected (401); check its client key and account pool")
+                raise RuntimeError("RR endpoint authentication rejected (401); check its key file")
             retryable = error.code in COMPACT_RETRYABLE_HTTP_CODES
             if not retryable or attempt == COMPACT_MAX_ATTEMPTS - 1:
                 error.close()

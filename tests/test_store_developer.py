@@ -258,7 +258,7 @@ class StoreDeveloperTests(unittest.TestCase):
             server = constructor.return_value.__enter__.return_value
             server.start.return_value = "new-thread"
             stack.enter_context(mock.patch.object(kb_codex, "config_flags", return_value=[]))
-            stack.enter_context(mock.patch.object(kb_remote, "pool_configuration",
+            stack.enter_context(mock.patch.object(kb_remote, "rr_configuration",
                                                  return_value=("http://127.0.0.1:12345/_pool/rr", "test-key")))
             # kb's own proxy receives the remote items; capture what it would insert.
             stack.enter_context(mock.patch.dict(os.environ, {"KB_REMOTE_MODE": "provider"}))

@@ -87,7 +87,7 @@ class PipelineTest(unittest.TestCase):
                 env["KB_REPOMAP_HOME"] = str(state_root)
                 command = [sys.executable, str(ROOT / "kb_repo_url.py"), str(source),
                            "--name", "fixture", "--budget-tokens", "5000", "--workers", "2",
-                           "--origin", f"http://127.0.0.1:{server.server_port}",
+                           "--rr-base-url", f"http://127.0.0.1:{server.server_port}/v1",
                            "--key-file", str(key), "--no-mint"]
                 for filename, option, value in (
                     ("reading instructions.txt", "--reading-instructions-file", reading_instructions),
@@ -134,7 +134,7 @@ class PipelineTest(unittest.TestCase):
                 self.assertEqual(len(calls) - first_stage_calls, first_stage_count // 2)
                 self.assertTrue(state["blobs"][0]["future_field"])
                 self.assertIn("marker_0", (state_root / "fixture" / "repository-map.txt").read_text())
-                self.assertTrue(all(path == "/_pool/rr/responses" for path, _ in calls))
+                self.assertTrue(all(path == "/v1/responses" for path, _ in calls))
                 for _, body in calls:
                     self.assertEqual(body["instructions"], expected_api)
                     self.assertEqual(body["input"][-1], {"type": "compaction_trigger"})

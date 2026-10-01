@@ -5,7 +5,7 @@ import os
 from pathlib import Path
 import urllib.request
 
-from kb_api import NoRedirect, pool_configuration
+from kb_api import NoRedirect, rr_configuration
 from kb_items import load_session_items
 
 
@@ -26,7 +26,7 @@ def pool_endpoint(config, environ=None):
         environ.setdefault("KB_POOL_KEY_FILE", args.key_file)
     if args.private_http:
         environ.setdefault("KB_POOL_PRIVATE_HTTP", "1")
-    base, key = pool_configuration(environ)
+    base, key = rr_configuration(environ)
     return base.removesuffix("/_pool/rr"), key
 
 

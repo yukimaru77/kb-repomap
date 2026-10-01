@@ -12,8 +12,9 @@ import urllib.error
 import urllib.request
 import uuid
 
+import kb_api
 import kb_store as store
-from kb_api import COMPACTION_TYPES, NoRedirect, events, pool_configuration
+from kb_api import COMPACTION_TYPES, NoRedirect, events, rr_configuration
 from kb_items import load_items
 
 
@@ -107,24 +108,20 @@ def select_plaintext(candidates, blob_tokens):
     return min(usable, key=lambda item: (abs(item["tokens"] - blob_tokens), item["order"])), CLOSEST_REASON
 
 
-def apply_pool(config, pool_config=None):
+def apply_rr(config, args=None):
+    """Explicit decrypt options replace the KB's saved build_args, which only fill in what is unset."""
+    explicit = {}
+    if args is not None:
+        kb_api.apply_rr_arguments(args, explicit)
+    if explicit:
+        os.environ.update(explicit)
+        rr_configuration()
+        return
     parser = argparse.ArgumentParser(add_help=False, allow_abbrev=False)
-    parser.add_argument("--pool-config")
-    parser.add_argument("--origin")
-    parser.add_argument("--key-file")
-    parser.add_argument("--private-http", action="store_true")
-    args, _ = parser.parse_known_args(config.get("build_args", []))
-    if pool_config:
-        os.environ["KB_POOL_CONFIG"] = str(Path(pool_config).expanduser())
-    elif args.pool_config:
-        os.environ.setdefault("KB_POOL_CONFIG", args.pool_config)
-    if args.origin:
-        os.environ.setdefault("KB_POOL_ORIGIN", args.origin)
-    if args.key_file:
-        os.environ.setdefault("KB_POOL_KEY_FILE", args.key_file)
-    if args.private_http:
-        os.environ.setdefault("KB_POOL_PRIVATE_HTTP", "1")
-    pool_configuration()
+    kb_api.add_rr_arguments(parser, help=False)
+    saved, _ = parser.parse_known_args(config.get("build_args", []))
+    kb_api.apply_rr_arguments(saved, override=False, resolve=False)
+    rr_configuration()
 
 
 def read_handoff(source):
@@ -162,7 +159,7 @@ def request_body(blob, model, effort):
 
 
 def call_once(blob, model, effort):
-    base, key = pool_configuration()
+    base, key = rr_configuration()
     session_id = str(uuid.uuid4())
     payload = json.dumps(request_body(blob, model, effort), ensure_ascii=False).encode()
     last_error = None
@@ -311,7 +308,7 @@ def publish_plaintext(store_entry, name, files):
 
 
 def decrypt(args, config):
-    apply_pool(config, getattr(args, "pool_config", None))
+    apply_rr(config, args)
     loaded = store.find_kb(config, args.name, args.store, filename=args.file)
     blobs = [item for item in load_items(loaded["jsonl"]) if item.get("type") in COMPACTION_TYPES]
     if not blobs:

@@ -509,8 +509,8 @@ class GitStoreTest(unittest.TestCase):
         key.write_text("synthetic-key")
         repo_map = self.root / "map.txt"
         repo_map.write_text("code.py contains a value\n")
-        config = {**self.config, "build_args": ["--origin", f"http://127.0.0.1:{server.server_port}",
-                                              "--key-file", str(key), "--repo-map", str(repo_map)]}
+        config = {**self.config, "build_args": ["--rr-base-url", f"http://127.0.0.1:{server.server_port}/custom/rr",
+                                              "--rr-key-file", str(key), "--repo-map", str(repo_map)]}
         if first_build:
             kb_store.write_config(config)
             with mock.patch("builtins.input", side_effect=[str(self.source), "main", self.store1["url"]]), \
@@ -540,7 +540,7 @@ class GitStoreTest(unittest.TestCase):
         self.assertEqual(len(requests), 1)
         self.assertEqual(len(builder_calls), 1)
         self.assertIn("--no-mint", builder_calls[0])
-        self.assertEqual(requests[0][0], "/_pool/rr/responses")
+        self.assertEqual(requests[0][0], "/custom/rr/responses")
         self.assertEqual(requests[0][1]["input"][-1], {"type": "compaction_trigger"})
         self.assertIn("new value", requests[0][1]["input"][0]["content"][0]["text"])
         latest = kb_store.find_kb(config, "example")
