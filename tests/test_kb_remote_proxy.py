@@ -68,7 +68,7 @@ class CodexInjectorTests(unittest.TestCase):
         self.assertEqual(json.loads(proxy.inject_codex({"input": [DEV]}, ITEMS))["input"], [DEV, *ITEMS])
         self.assertEqual(json.loads(proxy.inject_codex({"input": []}, ITEMS))["input"], ITEMS)
 
-    def test_identity_mirrors_pool_fields(self):
+    def test_identity_reads_codex_fields(self):
         headers = {"Session-Id": "s-header", "Thread-Id": "t-header"}
         payload = {"client_metadata": {"thread_id": "t-body", "x-codex-parent-thread-id": "p",
                                         "x-codex-turn-metadata": json.dumps({"request_kind": "compaction"})}}
@@ -85,7 +85,7 @@ class CodexProxyTests(unittest.TestCase):
         self.seen = []
         self.running = proxy.start(proxy.codex_injector(ITEMS), self.upstream.url,
                                    on_request=lambda *a: self.seen.append(a[1]),
-                                   set_headers={"Authorization": "Bearer POOLKEY"})
+                                   set_headers={"Authorization": "Bearer UPSTREAMKEY"})
         self.addCleanup(self.running.close)
 
     def post(self, path, body):
@@ -99,7 +99,7 @@ class CodexProxyTests(unittest.TestCase):
         self.assertEqual((status, data), (200, b'data: {"type":"response.completed"}\n\n'))
         request = self.upstream.requests[0]
         self.assertEqual(request["path"], "/backend-api/codex/responses")
-        self.assertEqual(request["headers"].get_all("Authorization"), ["Bearer POOLKEY"])
+        self.assertEqual(request["headers"].get_all("Authorization"), ["Bearer UPSTREAMKEY"])
         self.assertEqual(request["headers"]["Session-Id"], "sid")
         self.assertEqual(int(request["headers"]["Content-Length"]), len(request["body"]))
         self.assertEqual(json.loads(request["body"])["input"], [DEV, *ITEMS, USER])
@@ -122,7 +122,7 @@ class CodexProxyTests(unittest.TestCase):
         body = b'{ "input" : [ ] }'
         self.post("/responses/compact", body)
         self.assertEqual(self.upstream.requests[0]["body"], body)
-        self.assertEqual(self.upstream.requests[0]["headers"]["Authorization"], "Bearer POOLKEY")
+        self.assertEqual(self.upstream.requests[0]["headers"]["Authorization"], "Bearer UPSTREAMKEY")
         with urllib.request.urlopen(self.running.url + "/models?client_version=1", timeout=10) as response:
             response.read()
         self.assertEqual(self.upstream.requests[1]["path"], "/backend-api/codex/models?client_version=1")

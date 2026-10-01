@@ -48,7 +48,7 @@ def rebuild(name, info, commit, config, previous=None):
     state = json.loads((build_root / name / "state.json").read_text())
     total = len([item for item in state.get("blobs", []) if item.get("type") in COMPACTION_TYPES])
     reused_count = state.get("reused_packs") or 0
-    print(f"blob再利用: {reused_count}/{total} / 号池で圧縮: {total - reused_count}", flush=True)
+    print(f"blob再利用: {reused_count}/{total} / RRで圧縮: {total - reused_count}", flush=True)
     items = [item for item in state.get("blobs") or state.get("base_items", [])
              if item.get("type") in COMPACTION_TYPES]
     if state.get("reused_packs"):

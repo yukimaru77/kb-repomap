@@ -1,7 +1,7 @@
 """Loopback proxy that injects a KB into Claude Code or Codex model requests.
 
-kb owns the proxy for the lifetime of one client process. The account pool (for
-Codex) is only the upstream relay; nothing is registered with it.
+kb owns the proxy for the lifetime of one client process; nothing is registered
+with the upstream.
 """
 import datetime
 import gzip
@@ -256,7 +256,7 @@ def is_codex_responses(method, path):
 
 
 def codex_identity(headers, payload):
-    """Mirror the pool's kbRequestIdentity: session, thread, parent and request kind."""
+    """Codex request identity from its headers and body: session, thread, parent and request kind."""
     found = {"session": headers.get("Session-Id") or "", "thread": headers.get("Thread-Id") or "",
              "parent": headers.get("X-Codex-Parent-Thread-Id") or "", "kind": ""}
     sources = {key: f"{name} header" for key, name in (
@@ -298,7 +298,7 @@ def is_codex_compaction(payload, identity=None):
 
 
 def inject_codex(payload, items):
-    """Insert items after the leading system/developer messages (pool kbInject rule)."""
+    """Insert items after the leading system/developer messages (after the instructions, before the conversation)."""
     if payload.get("previous_response_id"):
         raise RequestError("remote KB requires a complete input history (previous_response_id is not supported)")
     source = payload.get("input")
@@ -326,7 +326,7 @@ def insert_codex_items(payload, items):
 
 
 class CodexConversation:
-    """Per-connection history so previous_response_id deltas keep the KB (pool kbConversation).
+    """Per-connection history so previous_response_id deltas keep the KB.
 
     The first complete input on a connection gets the KB. A delta that continues a
     response whose history already holds the KB passes through unchanged. When the

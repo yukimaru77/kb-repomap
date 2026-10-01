@@ -1,4 +1,4 @@
-"""Pure rules for stealth mode: WebSocket/HTTP conversation tracking (pool kbConversation port)."""
+"""Pure rules for stealth mode: WebSocket/HTTP conversation tracking."""
 import json
 from pathlib import Path
 import sys
@@ -65,7 +65,7 @@ class ConversationTests(unittest.TestCase):
         self.assertLess(text.index("KB-two"), text.index("new-conversation"))
 
     def test_unknown_previous_response_passes_through_untracked(self):
-        # The pool rejects this; stealth mode must never break the client, so it
+        # The provider proxy rejects this; stealth mode must never break the client, so it
         # forwards unchanged and stops expanding until a full input arrives.
         s = proxy.CodexConversation()
         self.assertIsNone(s.transform(create('{"type":"response.create","previous_response_id":"unseen",'

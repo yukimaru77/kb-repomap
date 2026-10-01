@@ -33,7 +33,7 @@ def success(item=None, output_tokens=3000):
 
 
 def http_error(code, headers=None):
-    return urllib.error.HTTPError("https://pool.invalid/_pool/rr/responses", code,
+    return urllib.error.HTTPError("https://rr.invalid/v1/responses", code,
                                   "failure", headers or {}, None)
 
 

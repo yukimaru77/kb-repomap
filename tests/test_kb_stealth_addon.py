@@ -1,6 +1,6 @@
 """kb_stealth_addon hooks, driven through mitmproxy's own test utilities.
 
-Run with a python that can import mitmproxy (for example the pool bridge venv);
+Run with a python that can import mitmproxy (for example `uv tool install mitmproxy`'s venv);
 the plain python3 suite skips these tests.
 """
 import gzip
