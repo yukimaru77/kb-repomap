@@ -96,6 +96,76 @@ def _remote_required(command_name):
     )
 
 
+def _resume_tail(native_args):
+    """Locate `resume` (root or under exec); return (head, tail, resume options) or None."""
+    args = list(native_args)
+    root_options, root_commands = _metadata()
+    boundary = _first_positional(args, root_options)
+    subcommand = root_commands.get(args[boundary]) if boundary is not None else None
+    if subcommand == "resume":
+        return args[:boundary + 1], args[boundary + 1:], _metadata(("resume",))[0]
+    if subcommand != "exec":
+        return None
+    tail = args[boundary + 1:]
+    exec_options, exec_commands = _metadata(("exec",))
+    positional = _first_positional(tail, exec_options)
+    if positional is None or exec_commands.get(tail[positional]) != "resume":
+        return None
+    split = boundary + 1 + positional + 1
+    return args[:split], args[split:], _metadata(("exec", "resume"))[0]
+
+
+def resume_request(native_args):
+    """Describe a native `resume ID|--last` launch, or None for other commands.
+
+    Returns {"thread": id or None, "last": bool, "all": bool, "exec": bool}.
+    """
+    found = _resume_tail(native_args)
+    if found is None:
+        return None
+    head, tail, options = found
+    flags = []
+    index = 0
+    while index < len(tail) and tail[index] != "--":
+        width = _option_width(tail, index, options)
+        if not width:
+            break
+        flags.append(tail[index])
+        index += width
+    last = "--last" in flags
+    thread = None
+    if not last:
+        if index >= len(tail) or tail[index] == "--":
+            raise ValueError("ローカル KB の codex resume にはセッション ID か --last を指定してください")
+        thread = tail[index]
+    return {"thread": thread, "last": last, "all": "--all" in flags, "exec": "exec" in head}
+
+
+def resume_command(native_args, session_id):
+    """Rewrite a native `resume ID|--last ...` argv to resume `session_id` instead."""
+    head, tail, options = _resume_tail(native_args)
+    # With --last the first positional is already the prompt; otherwise it is the old id.
+    skip_id = not resume_request(native_args)["last"]
+    rest = []
+    index = 0
+    while index < len(tail):
+        if tail[index] == "--":
+            rest.extend(tail[index:])
+            break
+        width = _option_width(tail, index, options)
+        if width:
+            if tail[index] != "--last":
+                rest.extend(tail[index:index + width])
+            index += width
+        elif skip_id:
+            skip_id = False
+            index += 1
+        else:
+            rest.append(tail[index])
+            index += 1
+    return ["codex", *head, session_id, *rest]
+
+
 def subcommand_index(native_args):
     """Locate a real root subcommand without mistaking option values for one."""
     options, commands = _metadata()
