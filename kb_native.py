@@ -127,7 +127,7 @@ def run_remote(native_args, remote, items, workspace, *, on_request=None, runner
         return proxy.run_client(command, env, workspace, runner)
 
 
-def launch_remote(native_args, binder, workspace, remote, *, pool_configured=False, runner=None):
+def launch_remote(native_args, binder, workspace, remote, *, runner=None):
     """Run Codex --remote in stealth mode, or through kb's provider proxy.
 
     `remote` returns the pool endpoint (origin, key); only provider mode needs it.
@@ -140,14 +140,6 @@ def launch_remote(native_args, binder, workspace, remote, *, pool_configured=Fal
         # A bound session has fixed items; a lazy resume picks them on the first request.
         items = binder.cached if binder.resolved and isinstance(binder.cached, list) else binder.items
         return run_remote(native_args, remote(), items, workspace, on_request=binder.observe, runner=runner)
-
-    # A configured local pool is the Codex transport for this mode.  Running
-    # the client with its account home directly would select one account only
-    # at process start, so it could not move to the next fill-first account
-    # when that account crosses the reserve threshold.  The kb proxy keeps
-    # injecting the KB while the pool relay selects an account per request.
-    if pool_configured is True:
-        return provider()
 
     payload = {"client": "codex", "record": binder.record, "items": binder.cached}
     return kb_stealth.launch("codex", ["codex", *native_args], payload, workspace, provider=provider,
@@ -165,8 +157,7 @@ def run(args, config, snapshot, workspace, context, *, developer_text=None):
         # The session id is Codex's, so bind it when the first request shows it.
         from kb_resume import CodexBinder
         binder = CodexBinder(config, _record(args), remote.items)
-        return launch_remote(args.native_args, binder, workspace, lambda: remote,
-                             pool_configured=remote.pool_configured)
+        return launch_remote(args.native_args, binder, workspace, lambda: remote)
     from kb_native_local import command as local_command, seed_overrides
     # Validate the command shape before creating a persisted session.
     local_command(args.native_args, "validation-only")
