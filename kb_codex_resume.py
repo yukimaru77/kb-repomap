@@ -60,6 +60,25 @@ def _initial_context_user(item):
     return _text(item).lstrip().startswith(INITIAL_CONTEXT_PREFIXES)
 
 
+# The bundle Codex re-installs inside a compaction's replacement_history
+# (build_initial_context); the new thread gets a fresh one at its start instead.
+BUNDLE_KIND_PREFIXES = ("host_skills.", "skills.", "permissions.", "collaboration_mode.", "multi_agent.",
+                        "agents_md.", "environments.", "apps.", "plugins.")
+BUNDLE_DEVELOPER_PREFIXES = ("<permissions instructions>", "<skills_instructions>", "<multi_agent_role>",
+                             "<multi_agent_mode>", "<collaboration_mode>", "<apps_instructions>",
+                             "<plugins_instructions>", "<environments_instructions>")
+
+
+def _initial_context_bundle(item):
+    kinds = _kinds(item)
+    if not (_message(item, "developer") or _message(item, "user")):
+        return False
+    if kinds:
+        return all(kind.startswith(BUNDLE_KIND_PREFIXES) for kind in kinds)
+    prefixes = BUNDLE_DEVELOPER_PREFIXES if item.get("role") == "developer" else INITIAL_CONTEXT_PREFIXES
+    return _text(item).lstrip().startswith(prefixes)
+
+
 def is_user_turn(item):
     """Approximates codex core's is_user_turn_boundary for rollback replay."""
     if item.get("type") == "agent_message":
@@ -104,7 +123,11 @@ def _drop_last_turns(history, turns):
 
 
 def effective_history(records):
-    """The model-visible history Codex rebuilds on resume: last compaction wins."""
+    """The model-visible history Codex rebuilds on resume: last compaction wins.
+
+    The stale initial-context bundle inside a replacement_history is left out:
+    Codex writes the current initial context at the start of the new thread.
+    """
     history = []
     for record in records:
         kind, payload = record.get("type"), record.get("payload") or {}
@@ -113,7 +136,7 @@ def effective_history(records):
             if replacement is None:
                 raise ValueError("replacement_history の無い旧形式の compaction は変換できません。"
                                  "kb NAME --remote codex ... を使用してください")
-            history = [dict(item) for item in replacement]
+            history = [dict(item) for item in replacement if not _initial_context_bundle(item)]
         elif kind == "response_item":
             history.append(payload)
         elif kind == "event_msg" and payload.get("type") == "thread_rolled_back":

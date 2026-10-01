@@ -60,9 +60,17 @@ class EffectiveHistoryTests(unittest.TestCase):
                    compacted(user("old turn"), SKILLS, AGENTS, user("latest"), SUMMARY),
                    {"type": "turn_context", "payload": {}},
                    *items(user("after"), assistant("reply"))]
+        # The stale initial-context bundle is dropped; Codex writes a fresh one first.
         self.assertEqual(self.converted(records), [
-            *KB, user("old turn"), SKILLS, AGENTS, user("latest"), SUMMARY, user("after"), assistant("reply")])
+            *KB, user("old turn"), user("latest"), SUMMARY, user("after"), assistant("reply")])
         self.assertNotIn(assistant("superseded"), self.converted(records))
+
+    def test_only_the_replacement_bundle_is_dropped(self):
+        switch = message("developer", "<collaboration_mode>plan</collaboration_mode>",
+                         ["collaboration_mode.instructions"])
+        records = [meta(), compacted(user("q"), PERMISSIONS, SKILLS, ENVIRONMENT, SUMMARY),
+                   *items(switch, user("next"))]
+        self.assertEqual(self.converted(records), [*KB, user("q"), SUMMARY, switch, user("next")])
 
     def test_last_of_several_compactions_wins(self):
         remote_summary = {"type": "compaction", "encrypted_content": "native-summary"}
