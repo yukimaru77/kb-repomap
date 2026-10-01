@@ -28,8 +28,8 @@ Python 3.12とNode.js/npmの依存関係をプロジェクト専用環境へ用�
 map/blob生成には不要です。初回のパッケージ・tiktoken辞書取得にはネットワークを使いますが、
 map生成自体にLLM呼び出しやAPIキーは不要です。
 
-**初めてKBを作るPCでは、先に `~/.config/kb/config.json` に号池の接続先とキーファイルの
-場所を設定してください。** [初回の設定手順](#作成再作成時の接続先とオプション)は下記にあります。
+**初めてKBを作るPCでは、先に `~/.config/kb/config.json` に圧縮用のRRエンドポイント
+（OpenAI Responses互換）の接続先とキーファイルの場所を設定してください。** [初回の設定手順](#作成再作成時の接続先とオプション)は下記にあります。
 インストーラーはAPIの接続先・キーを自動設定しません。
 `install.sh` は再実行しても安全です。uv が無ければ公式インストーラで導入し、`--remote` に使う
 mitmproxy（`mitmdump`）が無ければ `uv tool install mitmproxy` で導入します。npm（KB作成に使う Repomix 用）は
@@ -73,8 +73,8 @@ JSON配列には暗号化compaction項目と短いKB憲章（user指示）だけ
 `kb create xx --store <保存先名>` を使います。
 
 作り直しは既定で増分です。保存済みKB（同名ファイル、なければ `latest.json`）の
-`pack_manifest` を再利用元にし、基準ブランチの差分で影響を受けたパックだけ号池で圧縮し、
-残りのblobはそのまま流用します。実行時に `blob再利用: N/M / 号池で圧縮: K` を表示します。
+`pack_manifest` を再利用元にし、基準ブランチの差分で影響を受けたパックだけRRエンドポイントで圧縮し、
+残りのblobはそのまま流用します。実行時に `blob再利用: N/M / RRで圧縮: K` を表示します。
 前回blobを使わず全体を作り直す場合は `--clean` を付けます。
 `kb create`、`kb codex --rebuild always`、`kb NAME --rebuild always codex`、
 再作成の質問に `y` と答えた場合のいずれも同じ増分処理です。
@@ -85,7 +85,7 @@ kb create octane --clean    # 全体を作り直す
 kb octane --remote --rebuild always --clean codex
 ```
 
-作成には下記の `build_args` または `KB_POOL_*` による圧縮API接続先の設定が必要です。
+作成には下記の `build_args` または `KB_RR_*` による圧縮用RRエンドポイントの設定が必要です。
 `kb list` では未作成KBを「未作成」と表示します。作成後は同じ名前で `kb codex xx` を使えます。
 
 保存済みblobの平文は `kb decrypt xx` で復元します。blob が N 個なら、各波は high と max を同時に N 本ずつ、合計 2N 並列です。順番は次の4波で、最大8回です。
@@ -121,7 +121,7 @@ kb list
 
 復号済みのKBをClaude Codeへ渡す場合は、`decrypt/<ファイル名>/` 配下の選択済み `raw.txt`
 とその後ろに保存先の `dev.txt` を置いたものを初期システムコンテキストにして、
-新しいローカルClaudeセッションを起動します。号池は使用しません。
+新しいローカルClaudeセッションを起動します。RRエンドポイントは使用しません。
 
 ```bash
 kb octane claude --model sonnet
@@ -171,7 +171,7 @@ kb octane --file v1.00 --remote claude -p "要点を教えて"
 - KBの平文が `ps` やコマンドライン長の制限に乗らず、大きなKBもファイル読み込みなしで渡せます。
 - provider 方式: 既に `ANTHROPIC_BASE_URL` を設定している場合は、このセッションだけkbのプロキシで上書きします。
 - Claude Codeの終了とともにプロキシも停止し、終了コードはClaude Codeのものを返します。
-- 号池は使用しません。provider 方式の転送先は `KB_CLAUDE_UPSTREAM`（既定 `https://api.anthropic.com`）で変更できます。
+- RRエンドポイントは使用しません。provider 方式の転送先は `KB_CLAUDE_UPSTREAM`（既定 `https://api.anthropic.com`）で変更できます。
 - provider 方式では `ENABLE_TOOL_SEARCH=true` を既定で設定します。Claude Codeは Anthropic 以外の base URL では
   MCPツールの遅延読み込みを止めて全ツール定義を毎要求に前置きする（環境によっては16万トークン超）ため、
   kbのプロキシは tool_reference をそのまま転送し、通常どおりの必要時読み込みを保ちます。
@@ -283,7 +283,7 @@ KBの項目を保存せず、プロキシが全項目を挿入します。
 KBの準備だけでは user メッセージや推論を自動で開始しません。
 新構文の依頼文・標準入力はCodex自身へ渡し、旧構文は明示した `--prompt` だけを実行します。
 
-新旧の起動構文・TUI・`exec`・`--app`・`--remote`・`pool-rr` で共通です。
+新旧の起動構文・TUI・`exec`・`--app`・`--remote` で共通です。
 ローカル方式ではセッションへ挿入し、Remote方式ではkbのプロキシが各推論へ挿入します。
 暗号化blobや `latest.json` 自体は変更しません。編集を保存先へpushすると次回の
 新規起動から反映され、すでに起動したセッションの指示は変わりません。
@@ -293,36 +293,21 @@ KBの準備だけでは user メッセージや推論を自動で開始しませ
 kb octane --remote codex -m gpt-6-astra
 # 非対話実行、JSONLイベント、最終回答の保存
 kb octane --remote codex exec --json -o answer.txt "設計を説明して"
-# ラウンドロビンと併用
-pool-rr kb octane --remote codex exec -m gpt-6-astra "レビューして"
 # 標準入力はCodexへそのまま渡す
-cat question.txt | pool-rr kb octane --remote codex exec -
+cat question.txt | kb octane --remote codex exec -
 # Codexのreviewやヘルプもそのまま
 kb octane --remote codex review --uncommitted
 kb octane --remote codex exec --help
 ```
 
-既定の stealth 方式では、Codexの設定・provider・ログインは変えず、`HTTPS_PROXY` だけを渡して
-chatgpt.com への推論（WebSocket の `response.create`、HTTPの `POST /backend-api/codex/responses`）に
+Codex の `--remote` は stealth 方式だけです。Codexの設定・provider・ログインは変えず、`HTTPS_PROXY` だけを
+渡して chatgpt.com への推論（WebSocket の `response.create`、HTTPの `POST /backend-api/codex/responses`）に
 KBを挿入します（[`--remote` の方式](#--remote-の方式stealth--provider)）。
-以下は明示指定時の provider 方式（`pool-rr` 併用時も）の説明です。
-
-provider 方式の `--remote` は、Codexの起動中だけkbがローカルのプロキシ（`127.0.0.1` のランダムポート）を
-立て、起動するCodexプロセスだけに、そのプロキシを指す一時的なproviderを `-c` で設定します。
-プロキシは `POST .../responses` の `input` について、先頭の `role: system`/`developer` 項目の直後へ
-KB項目を挿入し、号池のクライアントキーを `Authorization` に付けて号池へ転送します
-（Codex側には仮のキーしか渡しません）。`compaction_trigger` を含む要求・`request_kind: compaction`・
-`/responses/compact`・`/models` などは変更せずに転送します。`previous_response_id` 付きの要求は
-履歴全体がないためKBを挿入できず、プロキシが400で拒否します（HTTPのSSE接続では送られません）。
-号池は単なるアカウントの中継で、号池側のKB登録（`/_pool/kb/bind`）は使いません。
+挿入位置は `input` の先頭の `role: system`/`developer` 項目の直後です。`compaction_trigger` を含む要求・
+`request_kind: compaction`・`/responses/compact`・`/models` などは変更せずに中継します。
 Codexが作った本来のセッションをそのまま使うため、`exec` を `exec resume` に変換せず実行します。
 最初の余分な推論もありません。
-通常は号池のfill-first経路（`<origin>/backend-api/codex`）、`pool-rr` 付きならRR経路へ転送します。
-`pool-rr` のproviderは `base_url` だけをプロキシへ向け、WebSocketは使いません。
-モデル一覧は通常のCodexが保存した `~/.codex/models_cache.json`（`CODEX_HOME`対応）を使います。
 起動時のKB診断はstderrへ出し、stdout・stdin・終了コードはCodexのままです。
-Codexの永続設定・ログイン状態は変更しません。provider自体を別サービスへ変える
-`-c model_provider=...` などとは併用しないでください。
 Codexの終了とともにプロキシも停止します。最初の推論要求で見えたセッションIDの binding を保存します。
 
 `--remote` を省略したローカルKBでは、KBを注入したセッションを作り、TUIまたは
@@ -345,10 +330,11 @@ kb codex octane --remote --file v1.00.json --store work
 kb codex octane --remote --session-only --rebuild never
 ```
 
-`--remote` は、新しいネイティブCodexセッションを作り、kbのプロキシ経由で `codex resume` する。
+`--remote` は、新しいネイティブCodexセッションを作り、kbの stealth プロキシ（mitmdump）経由で
+`codex resume` する。セッションの準備（`--prompt` の最初の依頼を含む）も同じプロキシを通す。
 KB本体をローカルのCodex履歴に入れず、プロキシが推論要求の先頭のsystem/developer項目の後へ挿入する。
 会話のcompaction blobがある場合も、その前に置く。コンパクト要求にはKBを含めない。
-案内（developer）と更新差分はセッション側へ一度だけ保存し、プロキシはそれ以外のKB項目を挿入する。
+更新差分（または中立の目印）だけをセッション側へ一度保存し、プロキシは `dev.txt` を含む全KB項目を挿入する。
 サブエージェントは同じCodexプロセスから送られるため、同じKBが挿入される。
 
 挿入するのは保存されたKB項目の配列。複数の独立blobとKB憲章の順序を保つ。
@@ -356,13 +342,7 @@ KB本体をローカルのCodex履歴に入れず、プロキシが推論要求�
 Gitの更新確認・再作成の質問・再作成しない場合の差分追加は、通常の `kb codex` と共通。
 `--prompt`、`--file` も併用できる。`--app` と `--session-only` ではkbの終了とともにプロキシも
 止まるため、その後のKB付きの続行は `kb --remote codex resume ID` で行う。
-
-接続には既存の `~/.config/kb/config.json` の `build_args` にある `--pool-config` で
-号池の共通JSON（例: `codex-account-pool/bridge.json`）を指定できる。
-既存の `--origin`、`--key-file`、必要なら `--private-http` と `KB_POOL_*` も使える。
-`pool-rr` が渡す `KB_POOL_ORIGIN`、`KB_POOL_KEY_FILE`、`KB_POOL_PRIVATE_HTTP` は保存済みの指定より優先する。
-Codexの永続設定・環境は変更しない（子プロセスにだけ仮のキー `KB_NATIVE_POOL_KEY` を渡す）。
-**Macの透過ブリッジが同じ号池へ接続していること**が必要。号池側のRemote KB機能は不要。
+新構文と同じく mitmdump と `kb ca-setup` によるCAの信頼登録が必要で、RRエンドポイントは使わない。
 
 ### `--remote` の方式（stealth / provider）
 
@@ -375,10 +355,11 @@ Codexの永続設定・環境は変更しない（子プロセスにだけ仮の
   `api.anthropic.com` だけで、それ以外のホストは中身に触れずに中継します。
   書き換えるのは Codex の `/backend-api/codex/responses`（WebSocket・HTTP）と Claude の
   `POST /v1/messages` だけです。クライアントの終了で mitmdump も止まり、終了コードはクライアントのものです。
-- **provider（明示指定のみ）**: 従来の loopback プロキシです。Codex は一時的な custom provider、
-  Claude は `ANTHROPIC_BASE_URL` でkbのプロキシを指すため、クライアントから見える挙動が変わります。
-  そのため**自動では使いません**。mitmdump が見つからない・起動できない場合は、導入手順
-  （`uv tool install mitmproxy && kb ca-setup`）と `KB_REMOTE_MODE=provider` の案内を出して終了します。
+- **provider（Claude Code のみ・明示指定のみ）**: 従来の loopback プロキシです。Claude は
+  `ANTHROPIC_BASE_URL` でkbのプロキシを指すため、クライアントから見える挙動が変わります。
+  そのため**自動では使いません**。Codex には provider 方式はなく、`KB_REMOTE_MODE=provider` を
+  指定するとエラーになります。mitmdump が見つからない・起動できない場合は、導入手順
+  （`uv tool install mitmproxy && kb ca-setup`）を案内して終了します。
 
 stealth 方式でクライアント側に**変わらないもの**:
 
@@ -389,12 +370,11 @@ stealth 方式でクライアント側に**変わらないもの**:
 
 方式の選択:
 
-- 既定は stealth で、フォールバックはありません。`KB_REMOTE_MODE=provider` を明示したときだけ provider 方式になります。
+- 既定は stealth で、フォールバックはありません。Claude Code では `KB_REMOTE_MODE=provider` を明示したときだけ
+  provider 方式になります。Codex は常に stealth です。
   mitmdump が見つからない・起動できない場合は案内を出して終了します。
-- **`pool-rr` 併用時（`KB_CODEX_CONFIG_OVERRIDES` がある Codex）は常に provider 方式**です。
-  RRの入口は号池のURLを指す必要があるためです。
-- mitmdump の探索順は `KB_MITMDUMP` → `PATH` の `mitmdump` →
-  `~/projects/codex-account-pool/bridge/.venv/bin/mitmdump` です。
+- mitmdump の探索順は `KB_MITMDUMP` → `PATH` の `mitmdump` → `~/.local/bin/mitmdump`
+  （`uv tool install mitmproxy` の既定の入れ先）です。
 
 CA（`KB_CA_DIR`、既定 `~/.cache/kb/ca`）は mitmdump の初回起動で生成されます。
 `kb ca-setup` でCAの場所・mitmdumpの有無・信頼登録の状態と手順を表示します（CAが無ければ生成します）。
@@ -534,41 +514,58 @@ kb publish octane --store work \
 `kb create` と起動時の再作成で使用するビルダーの引数は、同ファイルの `build_args` で指定します。
 キー本体は設定や保存先リポジトリに入れず、ローカルのキーファイルを指定してください。
 
-**号池の `bridge.json` があるPCでは、接続情報を複製せず、そのファイルを参照できます。**
+KBの作成（compaction）と `kb decrypt` が使う外部の接続先は、OpenAI Responses API互換の
+**RRエンドポイント**だけです。kbはその base URL の後ろに `/responses` を付けて送り、
+`Authorization: Bearer <キー>` で認証します。base URL のパスはそのまま使います
+（kb側で `/_pool/rr` などを付け足しません）。たとえばローカルの codex-account-pool を使う場合の
+base URL は `http://127.0.0.1:18473/_pool/rr` ですが、互換APIであれば提供元は問いません。
+`--remote` の推論やローカルKBの起動はRRエンドポイントを使いません。
+
+**接続情報をJSONファイルにまとめ、そのファイルを参照できます。**
 既存の `stores` は残したまま、`build_args` の接続設定を次のようにします。
 
 ```json
 {
   "stores": [],
   "build_args": [
-    "--pool-config", "~/codex-account-pool/bridge.json",
+    "--rr-config", "~/.config/kb/rr.json",
     "--workers", "12"
   ]
 }
 ```
 
-共通JSONでは `origin`、`private_http`、`key_file` を読みます。`key_file` がなければ
-`state_dir/client.key`、`state_dir` もなければ `state/client.key` を使います。
-`key_file` と `state_dir` の相対パスは共通JSONがあるディレクトリを基準にし、`~` も展開します。
-たとえば次のJSONは、その隣の `state/client.key` を読みます。
+JSONでは `base_url`、`key_file`、`private_http` を読みます。`key_file` の相対パスはJSONがある
+ディレクトリを基準にし、`~` も展開します。
 
 ```json
 {
-  "origin": "https://your-pool.example",
-  "private_http": false,
-  "state_dir": "state"
+  "base_url": "http://127.0.0.1:18473/_pool/rr",
+  "key_file": "client.key",
+  "private_http": false
 }
 ```
 
-接続時にJSONを読み直すため、同じファイルの `origin` を変更すると後続の接続へ反映されます。
-明示したJSONが存在しない場合はエラーになります。環境変数 `KB_POOL_CONFIG` でも指定できます。
-ビルダーではCLIの `--pool-config` が `KB_POOL_CONFIG` より優先します。
-接続各項目の優先順位は **明示した `--origin` / `--key-file` / `--private-http` →
-`KB_POOL_ORIGIN` / `KB_POOL_KEY_FILE` / `KB_POOL_PRIVATE_HTTP` → 共通JSON** です。
-Remote KBでは、ラッパーの接続先と一致させるため `KB_POOL_*` を `build_args` より優先します。
-`KB_POOL_PRIVATE_HTTP=0` でJSONの `private_http: true` を上書きできます。
+接続時にJSONを読み直すため、同じファイルの `base_url` を変更すると後続の接続へ反映されます。
+明示したJSONが存在しない場合はエラーになります。環境変数 `KB_RR_CONFIG` でも指定できます。
+各項目は環境変数 `KB_RR_BASE_URL`・`KB_RR_KEY_FILE`・`KB_RR_PRIVATE_HTTP`、
+CLIの `--rr-base-url`・`--rr-key-file`・`--rr-private-http` でも指定できます。
+ビルダーではCLIの指定が環境変数より優先します。環境変数の各項目はJSONより優先し、
+`KB_RR_PRIVATE_HTTP=0` でJSONの `private_http: true` を上書きできます。
+`kb decrypt` では、CLIで指定した接続先がKBの `build_args` より優先し、
+CLIの指定がなければ環境変数、最後に `build_args` を使います。
 
-共通JSONを使わず直接指定する従来の設定も利用できます。
+**旧名（非推奨の別名）**: 以前の名前も引き続き使えますが、新しい名前が常に優先します。
+
+| 新しい名前 | 旧名 |
+| --- | --- |
+| `KB_RR_CONFIG` / `--rr-config` | `KB_POOL_CONFIG` / `--pool-config` |
+| `KB_RR_BASE_URL` / `--rr-base-url` | `KB_POOL_ORIGIN` / `--origin`（base URL は origin + `/_pool/rr`） |
+| `KB_RR_KEY_FILE` / `--rr-key-file` | `KB_POOL_KEY_FILE` / `--key-file` |
+| `KB_RR_PRIVATE_HTTP` / `--rr-private-http` | `KB_POOL_PRIVATE_HTTP` / `--private-http` |
+
+旧形式のJSON（`origin`、`key_file` または `state_dir`、`private_http`）も `KB_RR_CONFIG`・`KB_POOL_CONFIG`
+のどちらでも読めます。`key_file` がなければ `state_dir/client.key`、`state_dir` もなければ
+`state/client.key` を使います。優先順位は低い方から **旧JSON → 旧環境変数 → 新JSON → 新環境変数** です。
 
 **初回は各PCで次の設定を行ってください。**
 
@@ -579,30 +576,30 @@ Remote KBでは、ラッパーの接続先と一致させるため `KB_POOL_*` �
    chmod 700 "$HOME/.config/kb"
    ```
 
-2. 号池のクライアントAPIキーを `~/.config/kb/client.key` に保存し、
+2. RRエンドポイントのAPIキーを `~/.config/kb/client.key` に保存し、
    `chmod 600 "$HOME/.config/kb/client.key"` を実行します。
    ファイルの内容はキー本体だけです。
 3. `~/.config/kb/config.json` をエディターで作成し、下の例の
-   `https://your-pool.example` を実際の号池URLへ置き換えます。
-   URLの末尾には `/v1` や `/_pool/rr` を付けません。
+   `https://rr.example/v1` を実際のRRエンドポイントの base URL へ置き換えます。
+   kbは末尾に `/responses` を付けるため、base URL には `/responses` を含めません。
    すでにファイルがある場合は、既存の `stores` を残したまま `build_args` を追加・編集します。
 
 ```json
 {
   "stores": [],
   "build_args": [
-    "--origin", "https://your-pool.example",
-    "--key-file", "~/.config/kb/client.key",
+    "--rr-base-url", "https://rr.example/v1",
+    "--rr-key-file", "~/.config/kb/client.key",
     "--workers", "12"
   ]
 }
 ```
 
 その後 `kb register` または `kb store add <名前> <保存先Git URL>` で保存先を登録します。
-これらのコマンドが設定するのは保存先の情報で、号池への接続設定は上記で用意します。
+これらのコマンドが設定するのは保存先の情報で、RRエンドポイントへの接続設定は上記で用意します。
 
-Tailscaleなどの確認済み私設トンネル内でHTTPを使う場合は、`--origin` にそのHTTP URLを指定し、
-`build_args` の要素として `"--private-http"` も追加してください。
+Tailscaleなどの確認済み私設トンネル内でHTTPを使う場合は、`--rr-base-url` にそのHTTP URLを指定し、
+`build_args` の要素として `"--rr-private-http"` も追加してください。
 
 この `config.json` とキーファイルはリポジトリの外に置くため、Gitの管理対象に含まれません。
 リポジトリに載せているのは設定例だけです。別のPCで使う際にも、そのPCの接続先とキーを設定します。
@@ -639,11 +636,11 @@ Aiderの同じオプションで呼ばれる解析・ランキング・表示処
 
 ## リポジトリからKBを作る
 
-号池と共通の接続設定を使う場合:
+接続設定のJSONを使う場合:
 
 ```bash
 uv run python kb_repo_url.py https://github.com/owner/repository.git \
-  --name my-kb --pool-config ~/codex-account-pool/bridge.json
+  --name my-kb --rr-config ~/.config/kb/rr.json
 ```
 
 接続先とキーの場所を直接指定する場合:
@@ -651,8 +648,8 @@ uv run python kb_repo_url.py https://github.com/owner/repository.git \
 ```bash
 uv run python kb_repo_url.py https://github.com/owner/repository.git \
   --name my-kb \
-  --origin https://your-pool.example \
-  --key-file /path/to/pool-client.key
+  --rr-base-url https://rr.example/v1 \
+  --rr-key-file /path/to/rr-client.key
 ```
 
 ローカルのGitリポジトリも指定できます。Tailscale等の確認済み私設トンネル内のHTTPなら:
@@ -660,22 +657,19 @@ uv run python kb_repo_url.py https://github.com/owner/repository.git \
 ```bash
 uv run python kb_repo_url.py /path/to/repository \
   --name my-kb \
-  --origin http://your-tailscale-host:18473 --private-http \
-  --key-file /path/to/pool-client.key
+  --rr-base-url http://your-tailscale-host:18473/_pool/rr --rr-private-http \
+  --rr-key-file /path/to/rr-client.key
 ```
 
-originには `/v1` などのパスを付けません。宛先はプールの **`/_pool/rr/responses`** です。
-一次・二次とも専用のround-robin経路を使います。認証はプールのクライアントAPIキーで行い、
-Codexの認証ファイルは読みません。アカウント選択・トークン更新はプールの担当です。
-
-Codex用の `User-Agent` と `originator` も号池側で毎回付与します。
-号池はルート別ヘッダー設定に対応した版（`421a868` 以降）を使い、サーバーの
-`pool.json` の `round_robin_endpoints["/_pool/rr/responses"].headers` に
-実通信で確認した値を設定してください。KB側ではCodexのバージョンや識別ヘッダーを固定しません。
-KBが送るのはプール認証と `Content-Type: application/json`、`Accept: text/event-stream` です。
+宛先は **`<base URL>/responses`** です。一次・二次とも同じ経路を使います。
+認証はRRエンドポイントのAPIキーで行い、Codexの認証ファイルは読みません。
+アカウント選択・トークン更新・クライアント識別ヘッダー（`User-Agent`・`originator` など）は
+RRエンドポイント側の担当で、KB側ではCodexのバージョンや識別ヘッダーを固定しません。
+KBが送るのは `Authorization`、`Content-Type: application/json`、`Accept: text/event-stream` です。
 WebSocket専用ヘッダーや一時的なセッションIDは、このHTTP/SSE経路にはコピーしません。
 
-このツール用の `KB_POOL_CONFIG`、`KB_POOL_ORIGIN`、`KB_POOL_KEY_FILE`、`KB_POOL_PRIVATE_HTTP=1` でも指定できます。
+環境変数 `KB_RR_CONFIG`、`KB_RR_BASE_URL`、`KB_RR_KEY_FILE`、`KB_RR_PRIVATE_HTTP=1` でも指定できます
+（旧名 `KB_POOL_*` は非推奨の別名）。
 Codex側の設定・ログイン・環境変数を変更する処理はありません。
 
 ### 作成の流れ
@@ -764,7 +758,7 @@ SSE内のfailed/incompleteや暗号化blob欠落は成功扱いしません。
 ```bash
 uv run python kb_repo_url.py /path/to/repository \
   --name my-kb-custom \
-  --origin https://your-pool.example --key-file /path/to/pool-client.key \
+  --rr-base-url https://rr.example/v1 --rr-key-file /path/to/rr-client.key \
   --repo-map ./map.md \
   --reading-instructions-file ./reading.txt \
   --instructions-file ./instructions.txt
@@ -843,7 +837,7 @@ uv run python scripts/check-aider-parity.py /path/to/pinned-aider /path/to/repos
 
 # 任意: 合成ソースで実APIを4回呼び、二段階圧縮後の値を照会
 uv run python scripts/live-check.py \
-  --origin https://your-pool.example --key-file /path/to/pool-client.key \
+  --rr-base-url https://rr.example/v1 --rr-key-file /path/to/rr-client.key \
   --output state/live-check.json
 ```
 
