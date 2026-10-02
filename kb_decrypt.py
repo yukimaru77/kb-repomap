@@ -1,5 +1,6 @@
 """Recover plaintext of stored compaction blobs and commit it to the KB repository."""
 import argparse
+import shutil
 import json
 import os
 from collections import Counter
@@ -284,7 +285,7 @@ def run_schedule(jobs, runner):
     return [job["selection"] for job in jobs]
 
 
-def publish_plaintext(store_entry, name, files):
+def publish_plaintext(store_entry, name, files, replace=None):
     branch = store_entry.get("branch") or store.default_branch(store_entry["url"])
     with tempfile.TemporaryDirectory(prefix="kb-decrypt-") as temporary:
         repo = Path(temporary) / "store"
@@ -293,13 +294,17 @@ def publish_plaintext(store_entry, name, files):
         if not (repo / name / "info.json").is_file():
             raise ValueError(f"KBは未登録です: {name} / store: {store_entry['name']}")
         names = []
+        if replace and (repo / replace).exists():
+            # Replace the whole published set so blobs of earlier KB versions disappear.
+            store.git(repo, "rm", "-r", "--quiet", "--", replace)
+            names.append(replace)
         for relative, source in files:
             target = repo / relative
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_bytes(source.read_bytes())
             target.chmod(0o600)
             names.append(relative)
-        store.git(repo, "add", "--", *names)
+        store.git(repo, "add", "-A", "--", *names)
         if store.git(repo, "diff", "--cached", "--quiet", check=False).returncode == 0:
             return store.git(repo, "rev-parse", "HEAD").stdout.strip()
         store.git(repo, "commit", "--quiet", "-m", f"Save {name} decrypt plaintext")
@@ -320,6 +325,14 @@ def decrypt(args, config):
     for index, blob in enumerate(blobs, start=1):
         label = safe_component(blob.get("id"), f"blob-{index}")
         directory = root / f"{index:02d}-{label}"
+        if not (directory / "selection.json").is_file():
+            # An incremental rebuild keeps unchanged blobs (same id) but may
+            # shift their position; reuse their finished plaintext.
+            for previous in sorted(root.glob(f"*-{label}")):
+                if previous != directory and (previous / "selection.json").is_file() \
+                        and (previous / "raw.txt").is_file():
+                    shutil.copytree(previous, directory, dirs_exist_ok=True)
+                    break
         directory.mkdir(parents=True, exist_ok=True)
         selection_path = directory / "selection.json"
         if selection_path.is_file() and (directory / "raw.txt").is_file():
@@ -334,8 +347,12 @@ def decrypt(args, config):
         for item in selections]}
     write_json(root / "manifest.json", manifest)
     prefix = f"{args.name}/decrypt/{Path(args.file).stem}"
-    files = [(f"{prefix}/{path.relative_to(root).as_posix()}", path)
-             for path in sorted(root.rglob("*")) if path.is_file()]
-    revision = publish_plaintext(loaded["store"], args.name, files)
+    # Only the current KB's blobs: the run directory also keeps plaintext of
+    # blobs from earlier KB versions (reused above), which must not leak into
+    # the published set that Claude reads.
+    current = [root / "manifest.json", *(path for job in jobs
+                                         for path in sorted(job["directory"].rglob("*")) if path.is_file())]
+    files = [(f"{prefix}/{path.relative_to(root).as_posix()}", path) for path in current]
+    revision = publish_plaintext(loaded["store"], args.name, files, replace=prefix)
     print(f"保存しました: {prefix} / {revision}", flush=True)
     return revision

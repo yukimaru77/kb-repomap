@@ -107,14 +107,15 @@ class DecryptCommandTest(unittest.TestCase):
                 body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
                 with self.lock:
                     self.calls.append(body)
+                    blob = body["input"][0]["id"]
                     high = sum(item["model"] == "gpt-5.6-luna" and item["reasoning"]["effort"] == "high"
-                               for item in self.calls)
+                               and item["input"][0]["id"] == blob for item in self.calls)
                 exact = high == 1 and body["model"] == "gpt-5.6-luna" and body["reasoning"]["effort"] == "high"
                 text = "EXACT-PLAINTEXT" if exact else "OTHER"
                 tokens = 10 if exact else 4
                 message = {"type": "message", "id": "msg-1", "content": [{"type": "output_text", "text": text}]}
                 usage = {"attribution": {"items": {
-                    "blob-a": {"input_tokens": 10, "output_tokens": 0},
+                    blob: {"input_tokens": 10, "output_tokens": 0},
                     "msg-1": {"input_tokens": 0, "output_tokens": tokens},
                 }}, "output_tokens": tokens}
                 events = [
@@ -173,6 +174,28 @@ class DecryptCommandTest(unittest.TestCase):
         before = len(self.calls)
         kb_cli.main(["decrypt", "example"])
         self.assertEqual(len(self.calls), before)
+
+
+    def test_reordered_kb_reuses_blob_plaintext_and_publishes_only_current_blobs(self):
+        kb_cli.main(["decrypt", "example"])
+        # An incremental rebuild: a new blob first, the unchanged blob-a moves to position 2.
+        snapshot = self.root / "kb2.json"
+        kb_decrypt.write_private(snapshot, json.dumps([
+            {"type": "compaction", "id": "blob-b", "encrypted_content": "new"},
+            {"type": "compaction", "id": "blob-a", "encrypted_content": "opaque"}]) + "\n")
+        info = json.loads(kb_store.git(self.store["url"], "show", "HEAD:example/info.json").stdout)
+        kb_store.publish(self.store, "example", info, snapshot)
+        before = len(self.calls)
+        kb_cli.main(["decrypt", "example"])
+        second = self.calls[before:]
+        self.assertTrue(second)
+        self.assertTrue(all(body["input"][0]["id"] == "blob-b" for body in second))  # blob-a reused
+        shown = kb_store.git(self.store["url"], "ls-tree", "-r", "--name-only", "HEAD").stdout.split()
+        self.assertIn("example/decrypt/latest/01-blob-b/raw.txt", shown)
+        self.assertIn("example/decrypt/latest/02-blob-a/raw.txt", shown)
+        self.assertNotIn("example/decrypt/latest/01-blob-a/raw.txt", shown)  # stale position removed
+        raw = kb_store.git(self.store["url"], "show", "HEAD:example/decrypt/latest/02-blob-a/raw.txt").stdout
+        self.assertEqual(raw, "EXACT-PLAINTEXT")
 
 
 def attempt_record(blob_id, model, effort, repeat, tokens):
