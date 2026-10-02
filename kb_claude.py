@@ -1,12 +1,38 @@
 """Start a local Claude Code session with a decrypted KB and dev.txt."""
+from functools import lru_cache
 import os
 from pathlib import Path
+import subprocess
 import uuid
 
 import kb_store as store
 
 
 MAX_INLINE_CONTEXT = 500_000
+SNAPSHOT_OPTION = "--system-prompt-snapshot"
+
+
+@lru_cache(maxsize=1)
+def _supports_snapshot_option():
+    try:
+        result = subprocess.run(["claude", "--help"], stdin=subprocess.DEVNULL, capture_output=True,
+                                text=True, timeout=15)
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return SNAPSHOT_OPTION in result.stdout
+
+
+def fresh_system_prompt(claude_args):
+    """Options that make a resumed conversation see this launch's appended prompt.
+
+    Claude Code records the system prompt on a conversation's first request and
+    sends that record on every resume, ignoring a different --append-system-prompt,
+    unless the snapshot is turned off for this process.
+    """
+    options = claude_args[:claude_args.index("--")] if "--" in claude_args else claude_args
+    if any(token == SNAPSHOT_OPTION or token.startswith(SNAPSHOT_OPTION + "=") for token in options):
+        return []
+    return [SNAPSHOT_OPTION, "off"] if _supports_snapshot_option() else []
 
 
 def _decrypt_files(loaded, name, filename):
@@ -62,14 +88,18 @@ def start(args, config):
             f"treat it as prior knowledge: {context_path}"
         )
     workspace = Path(args.workspace).expanduser().resolve()
-    from kb_resume import claude_resume_id
+    from kb_resume import claude_fork, claude_resume_id
     resuming, resumed_id = claude_resume_id(args.claude_args)
     if resuming:
         # Claude Code rejects --session-id together with --resume/--continue.
         # The appended system prompt is per process, so passing it again is
-        # what re-attaches the KB to the resumed conversation.
-        command = ["claude", "--append-system-prompt", prompt, *args.claude_args]
+        # what re-attaches the KB to the resumed (or, with --fork-session,
+        # forked) conversation.
+        command = ["claude", "--append-system-prompt", prompt, *fresh_system_prompt(args.claude_args),
+                   *args.claude_args]
         label = resumed_id or "resume"
+        if claude_fork(args.claude_args):
+            label = f"{resumed_id or '直近のセッション'} から新しいセッションを作成します (--fork-session)"
     else:
         command = ["claude", "--session-id", session_id, "--append-system-prompt", prompt, *args.claude_args]
         label = session_id

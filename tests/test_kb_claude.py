@@ -1,3 +1,4 @@
+import contextlib
 import io
 import json
 import tempfile
@@ -93,9 +94,37 @@ class ClaudeContextTests(unittest.TestCase):
             })()
             with mock.patch.object(kb_claude.os, "execvp", side_effect=SystemExit) as execvp, \
                  mock.patch.object(kb_claude.os, "chdir"), \
+                 mock.patch.object(kb_claude, "_supports_snapshot_option", return_value=False), \
                  self.assertRaises(SystemExit):
                 kb_claude.start(args, {"stores": [self.loaded["store"]]})
             command = execvp.call_args.args[1]
             self.assertNotIn("--session-id", command)  # Claude Code rejects it with --resume/--continue
             self.assertEqual(command[1], "--append-system-prompt")
             self.assertEqual(command[3:], [*resume, "-p", "hi"])
+
+    def test_an_explicit_snapshot_choice_is_left_to_the_user(self):
+        with mock.patch.object(kb_claude, "_supports_snapshot_option", return_value=True):
+            self.assertEqual(kb_claude.fresh_system_prompt(["-c"]), ["--system-prompt-snapshot", "off"])
+            self.assertEqual(kb_claude.fresh_system_prompt(["-c", "--system-prompt-snapshot=on"]), [])
+        with mock.patch.object(kb_claude, "_supports_snapshot_option", return_value=False):
+            self.assertEqual(kb_claude.fresh_system_prompt(["-c"]), [])
+
+    def test_fork_reattaches_the_kb_and_lets_claude_create_the_new_session(self):
+        sid = "11111111-2222-4333-8444-555555555555"
+        for fork in (["--resume", sid, "--fork-session"], ["--continue", "--fork-session"]):
+            args = type("Args", (), {
+                "name": "example", "file": "latest.json", "store": "test",
+                "workspace": str(self.root), "claude_args": [*fork, "-p", "hi"],
+            })()
+            with mock.patch.object(kb_claude.os, "execvp", side_effect=SystemExit) as execvp, \
+                 mock.patch.object(kb_claude.os, "chdir"), \
+                 mock.patch.object(kb_claude, "_supports_snapshot_option", return_value=True), \
+                 contextlib.redirect_stdout(io.StringIO()) as stdout, \
+                 self.assertRaises(SystemExit):
+                kb_claude.start(args, {"stores": [self.loaded["store"]]})
+            command = execvp.call_args.args[1]
+            self.assertNotIn("--session-id", command)
+            self.assertEqual(command[1], "--append-system-prompt")
+            # The recorded system prompt of the source would otherwise hide the KB.
+            self.assertEqual(command[3:], ["--system-prompt-snapshot", "off", *fork, "-p", "hi"])
+            self.assertIn("新しいセッションを作成します (--fork-session)", stdout.getvalue())
