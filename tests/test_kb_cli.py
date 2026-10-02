@@ -534,7 +534,7 @@ class GitStoreTest(unittest.TestCase):
              mock.patch.object(kb_codex, "start_session", return_value="started") as start, \
              contextlib.redirect_stdout(io.StringIO()):
             if first_build:
-                kb_cli.main(["create", "example"])
+                kb_cli.main(["create", "example", "--no-decrypt"])
             else:
                 kb_cli.launch(self.args("always"), config)
         self.assertEqual(len(requests), 1)
@@ -643,3 +643,34 @@ class CodexHandoffTest(unittest.TestCase):
             self.assertEqual(calls[0][0][-3:-1], ["--workspace", str(Path(calls[0][1]["KB_REPOMAP_HOME"]) / "repos")])
             self.assertEqual(calls[0][0][calls[0][0].index("--ref") + 1], "a" * 40)
             self.assertEqual(dict(os.environ), env_before)
+
+
+class DecryptAfterPublishTests(unittest.TestCase):
+    """KB-building commands also build the Claude plaintext unless --no-decrypt."""
+
+    def test_runs_decrypt_with_the_store_and_file(self):
+        import kb_decrypt
+        with mock.patch.object(kb_decrypt, "decrypt") as decrypt, contextlib.redirect_stdout(io.StringIO()):
+            kb_cli.decrypt_after_publish("ex", "pepabo", "latest.json", {"stores": []})
+        args = decrypt.call_args.args[0]
+        self.assertEqual((args.name, args.store, args.file), ("ex", "pepabo", "latest.json"))
+
+    def test_disabled_skips_decrypt(self):
+        import kb_decrypt
+        with mock.patch.object(kb_decrypt, "decrypt") as decrypt, contextlib.redirect_stdout(io.StringIO()) as out:
+            kb_cli.decrypt_after_publish("ex", "pepabo", "latest.json", {}, enabled=False)
+        decrypt.assert_not_called()
+        self.assertIn("kb decrypt ex", out.getvalue())
+
+    def test_decrypt_failure_is_a_warning(self):
+        import kb_decrypt
+        with mock.patch.object(kb_decrypt, "decrypt", side_effect=RuntimeError("boom")), \
+             contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()) as err:
+            kb_cli.decrypt_after_publish("ex", "pepabo", "latest.json", {})
+        self.assertIn("kb decrypt ex", err.getvalue())
+
+    def test_create_parser_accepts_no_decrypt(self):
+        with mock.patch.object(kb_cli.store, "read_config", return_value={"stores": []}), \
+             mock.patch.object(kb_cli.store, "find_kb", side_effect=SystemExit(0)):
+            with self.assertRaises(SystemExit):
+                kb_cli.main(["create", "example", "--no-decrypt"])

@@ -165,6 +165,27 @@ def developer_init(args, config):
     return revision
 
 
+def decrypt_after_publish(name, store_name, filename, config, *, enabled=True):
+    """Also build the Claude plaintext after a KB is saved (default on).
+
+    The KB itself is already published; a failed decrypt only prints a warning,
+    and `kb decrypt NAME` can be re-run later.
+    """
+    if not enabled:
+        print(f"Claude用の復号は省略しました（後で: kb decrypt {name}）", flush=True)
+        return
+    import argparse
+    from kb_decrypt import decrypt
+    args = argparse.Namespace(name=name, store=store_name, file=filename, rr_config=None,
+                              rr_base_url=None, origin=None, rr_key_file=None, rr_private_http=False)
+    print(f"Claude用の復号を作成します: {name}/{filename}（省略するには --no-decrypt）", flush=True)
+    try:
+        decrypt(args, config)
+    except Exception as error:  # noqa: BLE001 - the saved KB is still usable
+        print(f"警告: Claude用の復号に失敗しました（KBは保存済み）: {error}。後で kb decrypt {name} を実行してください",
+              file=sys.stderr, flush=True)
+
+
 def create_kb(name, loaded, commit, config, filename="latest.json", *, previous=None, clean=False,
               tree_files=False):
     print(f"KBを作成します: {name}@{commit} / store: {loaded['store']['name']}", flush=True)
@@ -411,6 +432,9 @@ def main(argv=None):
     codex.add_argument("--no-yolo", action="store_true")
     codex.add_argument("--prompt")
     codex.add_argument("--remote", action="store_true", help="kbのローカルプロキシで推論時だけKBを挿入する")
+    for command in (creation, publish, paper_publish):
+        command.add_argument("--no-decrypt", action="store_true",
+                             help="Claude用の復号（kb decrypt）を作成後に行わない（既定は行う）")
     for command in (creation, publish, paper_publish, codex, decrypt_command):
         command.add_argument("--file", default="latest.json", type=file_argument,
                              help="KBファイル名（.jsonは省略可、既定: latest.json、旧.jsonlも読込可、同名は上書き）")
@@ -428,6 +452,8 @@ def main(argv=None):
         previous = None if args.clean else previous_kb(config, args.name, args.store, args.file)
         create_kb(args.name, loaded, store.source_head(loaded["info"]), config, args.file,
                   previous=previous, clean=args.clean, tree_files=args.tree_files)
+        decrypt_after_publish(args.name, loaded["store"]["name"], args.file, config,
+                              enabled=not args.no_decrypt)
     elif args.command == "dev-init":
         developer_init(args, config)
     elif args.command == "store":
@@ -462,10 +488,12 @@ def main(argv=None):
                     print(f"{name}\t{entry['name']}\t{commit[:12] if commit else '未作成'}\t{branch}\t{jsonl_name}")
     elif args.command == "publish-paper":
         publish_paper(args, config)
+        decrypt_after_publish(args.name, args.store, args.file, config, enabled=not args.no_decrypt)
     elif args.command == "publish":
         info = {"repository_url": args.repository_url, "source_commit": args.source_commit, "branch": args.branch}
         selected = store.configured_stores(config, args.store)[0]
         print(store.publish(selected, args.name, info, args.jsonl, filename=args.file))
+        decrypt_after_publish(args.name, selected["name"], args.file, config, enabled=not args.no_decrypt)
     elif args.command == "codex":
         result = launch(args, config)
         if isinstance(result, int):
