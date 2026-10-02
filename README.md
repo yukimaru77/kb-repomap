@@ -131,13 +131,19 @@ kb octane --file v1.00 claude --permission-mode bypassPermissions
 `decrypt` の成果物がない場合は、先に `kb decrypt octane` を実行してください。
 再作成を選んだ場合は同じファイル名を更新します。
 
-再開も kb 経由で行います。`--append-system-prompt` はプロセスごとの指定なので、
-素の `claude --resume ID` では会話は戻っても KB は付きません。
+再開・フォークも kb 経由で行います。`--append-system-prompt` はプロセスごとの指定なので、
+素の `claude --resume ID` では会話は戻っても KB は付きません。Claude Code は会話の最初の要求の
+system prompt を記録して再開時にもそれを送るため、kb は再開時に（対応する Claude Code なら）
+`--system-prompt-snapshot off` も付けます（自分で指定した場合はそのまま）。`--session-id` は付けません。
 
 ```bash
 kb octane claude --resume <セッションID>   # KB を付け直して再開
 kb octane claude --continue
+kb octane claude --resume <セッションID> --fork-session   # 新しいセッションIDにフォーク
+kb octane claude --continue --fork-session
 ```
+
+`--fork-session` では Claude Code が新しいセッションIDを作り、元のセッションは変わりません。
 
 ### `--remote` でリクエストごとにKBを挿入する
 
@@ -312,7 +318,7 @@ Codexの終了とともにプロキシも停止します。最初の推論要求
 
 `--remote` を省略したローカルKBでは、KBを注入したセッションを作り、TUIまたは
 `exec resume` で起動します。Codexのオプションはインストール済みCLIのヘルプから
-判別して渡します。`review` と `fork` には `--remote` を使ってください。
+判別して渡します。`review` には `--remote` を使ってください。
 `--ephemeral` を指定しても、ローカルKBを注入する準備用セッションは保存されます。
 
 既存セッションの `resume ID`・`resume --last`（`exec resume` も同じ）は、元のセッションを
@@ -326,10 +332,18 @@ compaction 済みの場合も、最後の compaction が置き換えた範囲の
 新しいセッションへ写すので、再開時には元と同じ会話が表示されます（モデルが見る履歴は変わりません）。
 元と新しいセッションのIDはstderrに表示します。
 
+`fork ID`・`fork --last`（`exec fork ID` も）も同じ変換です。変換で元を変えない新しいセッションが
+できるので、それを `resume`（`exec fork` は `exec resume`）で開きます。残りのオプションとプロンプトは
+そのまま渡し、`--last`・`--all` は変換元の選択にだけ使います（`--all` は cwd で絞らずに最新を選ぶ）。
+フォーク元を選ぶ選択画面には対応しないため、IDか `--last` を指定してください。
+
 ```bash
 kb octane codex resume 01a0d6f6-38fa-7291-9546-e25e3da6fd0b
 kb octane codex resume --last -m gpt-6-astra
 kb octane codex exec resume <ID> "続きをお願いします"
+kb octane codex fork 01a0d6f6-38fa-7291-9546-e25e3da6fd0b
+kb octane codex fork --last --all "別案を試して"
+kb octane codex exec fork <ID> "別案を試して"
 ```
 ローカル方式の準備時には `-c` と `-m` を適用しますが、`-p` や
 `--ignore-user-config` などで初期プロンプトの設定まで完全に切り替える場合は
@@ -416,7 +430,8 @@ binding を保存します。
 {"client": "codex", "name": "octane", "store": "pepabo", "file": "latest.json", "created": "2026-09-29T14:00:25+00:00"}
 ```
 
-- Claude: kbがセッションIDを作るため、起動時に保存します。
+- Claude: 新規セッションはkbがセッションIDを作るため、起動時に保存します。`--resume`・`--continue`
+  （`--fork-session` を含む）では最初の要求のセッションIDで保存します。
 - Codex: 最初の `/responses` 要求の `client_metadata`（`x-codex-turn-metadata` の `thread_id` など）や
   `Session-Id`/`Thread-Id` ヘッダーからセッションIDを取り、保存します。どの値を使ったかは
   binding の `id_source` と `~/.cache/kb/bindings/proxy.log` に残ります。
@@ -429,6 +444,15 @@ kb --remote codex resume            # TUIの選択画面や --last も可
 kb --remote codex exec resume --last "続きをお願いします"
 kb --remote claude --resume 6222add9-51b5-486c-85a6-168b4f46e295
 kb --remote claude --continue
+# フォーク: 元のbindingのKBを挿入し、新しいセッションにも同じKBの binding を書く
+kb --remote codex fork 01a0ed77-74f8-74c1-9e1e-154c926b22ea
+kb --remote codex fork --last
+kb --remote codex exec fork 01a0ed77-74f8-74c1-9e1e-154c926b22ea "別案を試して"
+kb --remote claude --resume 6222add9-51b5-486c-85a6-168b4f46e295 --fork-session
+kb --remote claude --continue --fork-session
+# KB名を指定すると、bindingの無いセッションもそのKBでフォーク・再開できる
+kb octane --remote codex fork <ID>
+kb octane --remote claude --resume <ID> --fork-session
 ```
 
 - binding の保存先・KB名・ファイル名から、**再開時点の保存先の内容（最新のKB・dev.txt・更新差分）**を
@@ -440,6 +464,10 @@ kb --remote claude --continue
   プロキシを起動しておき、最初の推論要求に含まれるセッションID（Claudeは `X-Claude-Code-Session-Id`）
   から binding を探します。見つからなければKBを挿入せずに転送します。
 - 再開やforkで新しいセッションIDが使われた場合も、同じKBの binding を追加で保存します。
+  Codex の fork は最初の要求の `x-codex-turn-metadata` に `thread_id`（新しいID）と
+  `forked_from_thread_id`（フォーク元）を載せるので、`fork --last` でもフォーク元の binding を探せます。
+  Claude の fork の要求には新しいIDしか無いため、`--continue --fork-session` は起動前に
+  そのディレクトリで最新のセッション（`~/.claude/projects/<cwd>/` の最新 transcript）の binding を使います。
 - **kbを経由しない通常の `codex resume` や `claude --resume` では、KBは挿入されません。**
   Remote KBの本体はセッション履歴に保存されていないためです。
 

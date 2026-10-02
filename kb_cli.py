@@ -350,7 +350,8 @@ def main(argv=None):
             raise SystemExit(start_remote(args, store.read_config()))
         return start(args, store.read_config())
     parser = argparse.ArgumentParser(prog="kb", epilog="起動: kb NAME [KB options] codex|claude [client args...] / "
-                                     "--remote の再開: kb --remote codex resume [ID] | kb --remote claude --resume ID")
+                                     "--remote の再開・フォーク: kb --remote codex resume|fork [ID] | "
+                                     "kb --remote claude --resume ID [--fork-session]")
     commands = parser.add_subparsers(dest="command", required=True)
     registration = commands.add_parser("register", help="URL・ブランチ・保存先を対話登録")
     registration.add_argument("name", nargs="?", type=store.name_value, help="KB名（省略すると質問）")
