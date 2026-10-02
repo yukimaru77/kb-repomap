@@ -216,6 +216,43 @@ class StartRemoteTests(unittest.TestCase):
         record = kb_claude_remote.proxy.read_binding(seen["command"][2], "claude")
         self.assertEqual((record["name"], record["file"]), ("example", "latest.json"))
 
+    def test_start_remote_fork_binds_the_new_session_from_its_first_request(self):
+        upstream = FakeUpstream()
+        self.addCleanup(upstream.close)
+        bindings = tempfile.TemporaryDirectory()
+        self.addCleanup(bindings.cleanup)
+        for patcher in (mock.patch.object(kb_claude_remote.proxy, "BINDINGS", Path(bindings.name)),
+                        mock.patch.dict(kb_claude_remote.os.environ, {
+                            "KB_CLAUDE_UPSTREAM": upstream.url, "KB_REMOTE_MODE": "provider"})):
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        source, forked = "11111111-2222-4333-8444-555555555555", "11111111-2222-4333-8444-666666666666"
+        args = type("Args", (), {
+            "name": "example", "file": "latest.json", "store": "test",
+            "workspace": str(self.root), "claude_args": ["--resume", source, "--fork-session", "-p", "hi"],
+        })()
+        seen = {}
+
+        def runner(command, env, cwd):
+            seen.update(command=command)
+            request = urllib.request.Request(env["ANTHROPIC_BASE_URL"] + "/v1/messages",
+                                              data=b'{"messages": [{"role": "user", "content": "q"}]}',
+                                              headers={"X-Claude-Code-Session-Id": forked}, method="POST")
+            with urllib.request.urlopen(request, timeout=10) as response:
+                response.read()
+            return type("Done", (), {"returncode": 0})()
+
+        with mock.patch("sys.stderr") as stderr:
+            kb_claude_remote.start_remote(args, {"stores": [self.loaded["store"]]}, runner=runner)
+        self.assertEqual(seen["command"], ["claude", "--resume", source, "--fork-session", "-p", "hi"])
+        self.assertIn("復号された知識", json.loads(upstream.requests[0]["body"])["messages"][0]["content"][0]["text"])
+        record = kb_claude_remote.proxy.read_binding(forked, "claude")
+        self.assertEqual((record["name"], record["file"], record["id_source"]),
+                         ("example", "latest.json", "X-Claude-Code-Session-Id header"))
+        self.assertIsNone(kb_claude_remote.proxy.read_binding(source))
+        output = "".join(call.args[0] for call in stderr.write.call_args_list)
+        self.assertIn("新しいセッションを作成します", output)
+
     def test_start_remote_rejects_session_id(self):
         args = type("Args", (), {
             "name": "example", "file": "latest.json", "store": "test",

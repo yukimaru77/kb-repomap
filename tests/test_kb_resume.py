@@ -59,6 +59,22 @@ class ArgvTests(unittest.TestCase):
         self.assertEqual(kb_resume.claude_resume_id(["--resume"]), (True, None))
         self.assertEqual(kb_resume.claude_resume_id(["--continue", "-p", "x"]), (True, None))
         self.assertEqual(kb_resume.claude_resume_id(["-p", "x"]), (False, None))
+        self.assertTrue(kb_resume.claude_fork(["--resume", SID, "--fork-session"]))
+        self.assertFalse(kb_resume.claude_fork(["--continue", "--", "--fork-session"]))
+
+    def test_claude_latest_session_is_the_newest_transcript_of_the_directory(self):
+        import os
+        with tempfile.TemporaryDirectory() as home:
+            env = {"CLAUDE_CONFIG_DIR": home}
+            workspace = Path("/private/tmp/a.b_c")
+            self.assertIsNone(kb_resume.claude_latest_session(workspace, env))
+            directory = Path(home) / "projects" / "-private-tmp-a-b-c"
+            directory.mkdir(parents=True)
+            for index, name in enumerate((SID, OTHER, "agent-x")):
+                path = directory / f"{name}.jsonl"
+                path.write_text("{}\n")
+                os.utime(path, (1000 + index, 1000 + index))
+            self.assertEqual(kb_resume.claude_latest_session(workspace, env), OTHER)
 
     def test_cli_resume_mode_needs_no_kb_name(self):
         with mock.patch.object(kb_cli.store, "read_config", return_value={"c": 1}), \
@@ -208,6 +224,32 @@ class ClaudeResumeTests(Isolated):
         sent = json.loads(self.upstream.requests[0]["body"])
         self.assertEqual(sent["system"], "s")
         self.assertEqual(sent["messages"][0]["content"], [BLOCK, {"type": "text", "text": "q"}])
+
+    def run_fork(self, claude_args, latest=None):
+        user_id = json.dumps({"device_id": "d", "session_id": OTHER})
+        with mock.patch.object(kb_resume, "claude_latest_session", return_value=latest):
+            return self.run_claude(claude_args, {"system": "s", "messages": [PROMPT], "metadata": {"user_id": user_id}})
+
+    def test_fork_of_known_id_injects_and_binds_the_new_session(self):
+        proxy.write_binding(SID, "claude", "octane", "pepabo", "v1.json")
+        _code, seen = self.run_fork(["--resume", SID, "--fork-session", "-p", "hi"])
+        self.assertEqual(seen["command"], ["claude", "--resume", SID, "--fork-session", "-p", "hi"])
+        self.assertEqual(json.loads(self.upstream.requests[0]["body"])["messages"][0]["content"][0], BLOCK)
+        record = proxy.read_binding(OTHER, "claude")
+        self.assertEqual((record["name"], record["store"], record["file"]), ("octane", "pepabo", "v1.json"))
+        self.assertEqual(record["id_source"], "metadata.user_id.session_id")
+        self.assertIn("フォーク", sys.stderr.getvalue())
+
+    def test_continue_fork_uses_the_binding_of_the_session_it_continues(self):
+        proxy.write_binding(SID, "claude", "octane", None, "latest.json")
+        self.run_fork(["--continue", "--fork-session", "-p", "hi"], latest=SID)
+        self.assertEqual(json.loads(self.upstream.requests[0]["body"])["messages"][0]["content"][0], BLOCK)
+        self.assertEqual(proxy.read_binding(OTHER, "claude")["name"], "octane")
+
+    def test_continue_fork_of_an_unbound_session_is_not_injected(self):
+        self.run_fork(["-c", "--fork-session"], latest=SID)
+        self.assertEqual(json.loads(self.upstream.requests[0]["body"])["messages"], [PROMPT])
+        self.assertIsNone(proxy.read_binding(OTHER))
 
     def test_unknown_id_launches_plain_claude(self):
         with mock.patch.dict("os.environ", {"ANTHROPIC_BASE_URL": ""}):

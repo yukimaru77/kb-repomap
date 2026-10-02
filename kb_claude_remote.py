@@ -45,9 +45,20 @@ def start_remote(args, config, runner=None):
     session_id = str(uuid.uuid4())
     workspace = Path(args.workspace).expanduser().resolve()
     record = {"name": args.name, "store": loaded["store"]["name"], "file": args.file}
+    binder = kb_resume.ClaudeBinder(config, record, block)
+    resuming, resumed_id = kb_resume.claude_resume_id(args.claude_args)
+    if resuming:
+        # Claude Code rejects --session-id with --resume/--continue. The binder
+        # binds the session id of the first request, which with --fork-session
+        # is the new session's.
+        label = resumed_id or "resume"
+        if kb_resume.claude_fork(args.claude_args):
+            label = f"{resumed_id or '直近のセッション'} から新しいセッションを作成します (--fork-session)"
+        return kb_resume.run_claude(args.claude_args, binder, workspace,
+                                    session_label=f"KB: {args.name}/{args.file} / Claude session: {label}",
+                                    runner=runner)
     # kb owns the Claude session id, so the binding exists before the first request.
     proxy.write_binding(session_id, "claude", record["name"], record["store"], record["file"], source="kb --session-id")
-    binder = kb_resume.ClaudeBinder(config, record, block)
     return kb_resume.run_claude(["--session-id", session_id, *args.claude_args], binder, workspace,
                                 session_label=f"KB: {args.name}/{args.file} / Claude session: {session_id}",
                                 runner=runner)

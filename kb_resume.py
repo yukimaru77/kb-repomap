@@ -52,6 +52,29 @@ def claude_resume_id(claude_args):
     return False, None
 
 
+def claude_fork(claude_args):
+    """Whether Claude Code resumes into a new session id (--fork-session)."""
+    options = claude_args[:claude_args.index("--")] if "--" in claude_args else claude_args
+    return "--fork-session" in options
+
+
+def claude_projects_dir(workspace, env=None):
+    """Claude Code's transcript directory for `workspace` (non-alphanumerics become '-')."""
+    env = os.environ if env is None else env
+    home = Path(env.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude").expanduser()
+    return home / "projects" / re.sub(r"[^A-Za-z0-9]", "-", str(workspace))
+
+
+def claude_latest_session(workspace, env=None):
+    """The session id --continue picks in `workspace` (newest transcript), or None."""
+    try:
+        transcripts = [path for path in claude_projects_dir(workspace, env).glob("*.jsonl")
+                       if UUID.match(path.stem)]
+        return max(transcripts, key=lambda path: path.stat().st_mtime).stem if transcripts else None
+    except OSError:
+        return None
+
+
 # --- KB material from a binding -----------------------------------------
 
 def _loaded(config, record):
@@ -273,16 +296,25 @@ def run_claude_provider(claude_args, binder, workspace, *, session_label, runner
 def resume_claude(claude_args, config, *, runner=None):
     is_resume, session_id = claude_resume_id(claude_args)
     if not is_resume:
-        raise ValueError("kb --remote claude はセッションの再開専用です: kb --remote claude --resume ID / --continue。"
+        raise ValueError("kb --remote claude はセッションの再開・フォーク専用です: "
+                         "kb --remote claude --resume ID / --continue [--fork-session]。"
                          "新規セッションは kb NAME --remote claude ...")
     workspace = Path.cwd()
+    fork = claude_fork(claude_args)
+    if fork and not session_id:
+        # The fork's requests carry only its new session id, so find the
+        # session --continue forks from (the newest transcript of this directory).
+        session_id = claude_latest_session(workspace)
+        if session_id is None or proxy.read_binding(session_id, "claude") is None:
+            session_id = None
     if session_id:
         record = proxy.read_binding(session_id, "claude")
         if record is None:
             notice(f"kb: {session_id} はkbの --remote セッションではないため、KBを挿入せずに起動します")
             return proxy.run_client(["claude", *claude_args], dict(os.environ), workspace, runner)
         binder = ClaudeBinder(config, record, claude_block(config, record))
-        label = f"KB: {record['name']}/{record['file']} (binding {session_id}) の最新内容を挿入して再開します"
+        action = ("フォークします（新しいセッションIDにもbindingを書きます）" if fork else "再開します")
+        label = f"KB: {record['name']}/{record['file']} (binding {session_id}) の最新内容を挿入して{action}"
     else:
         binder = ClaudeBinder(config)
         label = "KB: 最初のリクエストのセッションIDからbindingを探します"
