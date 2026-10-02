@@ -96,34 +96,39 @@ def _remote_required(command_name):
     )
 
 
+# Local KB forks are conversions too: the converted thread is already a new one.
+_CONVERTED = ("resume", "fork")
+
+
 def _resume_tail(native_args):
-    """Locate `resume` (root or under exec); return (head, tail, resume options) or None."""
+    """Locate `resume`/`fork` (root or under exec); return (head, tail, its options, verb) or None."""
     args = list(native_args)
     root_options, root_commands = _metadata()
     boundary = _first_positional(args, root_options)
     subcommand = root_commands.get(args[boundary]) if boundary is not None else None
-    if subcommand == "resume":
-        return args[:boundary + 1], args[boundary + 1:], _metadata(("resume",))[0]
+    if subcommand in _CONVERTED:
+        return args[:boundary + 1], args[boundary + 1:], _metadata((subcommand,))[0], subcommand
     if subcommand != "exec":
         return None
     tail = args[boundary + 1:]
     exec_options, exec_commands = _metadata(("exec",))
     positional = _first_positional(tail, exec_options)
-    if positional is None or exec_commands.get(tail[positional]) != "resume":
+    child = exec_commands.get(tail[positional]) if positional is not None else None
+    if child not in _CONVERTED:
         return None
     split = boundary + 1 + positional + 1
-    return args[:split], args[split:], _metadata(("exec", "resume"))[0]
+    return args[:split], args[split:], _metadata(("exec", child))[0], child
 
 
 def resume_request(native_args):
-    """Describe a native `resume ID|--last` launch, or None for other commands.
+    """Describe a native `resume|fork ID|--last` launch, or None for other commands.
 
-    Returns {"thread": id or None, "last": bool, "all": bool, "exec": bool}.
+    Returns {"thread": id or None, "last": bool, "all": bool, "exec": bool, "fork": bool}.
     """
     found = _resume_tail(native_args)
     if found is None:
         return None
-    head, tail, options = found
+    head, tail, options, verb = found
     flags = []
     index = 0
     while index < len(tail) and tail[index] != "--":
@@ -136,16 +141,22 @@ def resume_request(native_args):
     thread = None
     if not last:
         if index >= len(tail) or tail[index] == "--":
-            raise ValueError("ローカル KB の codex resume にはセッション ID か --last を指定してください")
+            raise ValueError(f"ローカル KB の codex {verb} にはセッション ID か --last を指定してください")
         thread = tail[index]
-    return {"thread": thread, "last": last, "all": "--all" in flags, "exec": "exec" in head}
+    return {"thread": thread, "last": last, "all": "--all" in flags, "exec": "exec" in head, "fork": verb == "fork"}
 
 
 def resume_command(native_args, session_id):
-    """Rewrite a native `resume ID|--last ...` argv to resume `session_id` instead."""
-    head, tail, options = _resume_tail(native_args)
+    """Rewrite a native `resume|fork ID|--last ...` argv to resume `session_id` instead.
+
+    A fork becomes a resume of the converted thread: fork's options are a subset
+    of resume's, and --last/--all only selected the thread that was converted.
+    """
+    head, tail, options, _verb = _resume_tail(native_args)
+    request = resume_request(native_args)
+    dropped = ("--last", "--all") if request["fork"] else ("--last",)
     # With --last the first positional is already the prompt; otherwise it is the old id.
-    skip_id = not resume_request(native_args)["last"]
+    skip_id = not request["last"]
     rest = []
     index = 0
     while index < len(tail):
@@ -154,7 +165,7 @@ def resume_command(native_args, session_id):
             break
         width = _option_width(tail, index, options)
         if width:
-            if tail[index] != "--last":
+            if tail[index] not in dropped:
                 rest.extend(tail[index:index + width])
             index += width
         elif skip_id:
@@ -163,7 +174,7 @@ def resume_command(native_args, session_id):
         else:
             rest.append(tail[index])
             index += 1
-    return ["codex", *head, session_id, *rest]
+    return ["codex", *head[:-1], "resume", session_id, *rest]
 
 
 def subcommand_index(native_args):

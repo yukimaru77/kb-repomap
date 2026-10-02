@@ -78,10 +78,11 @@ def run(args, config, snapshot, workspace, context, *, developer_text=None):
 
 
 def run_local_resume(args, snapshot, workspace, context, *, developer_text=None):
-    """`kb NAME codex [exec] resume ID|--last`: resume a KB-converted copy of the thread.
+    """`kb NAME codex [exec] resume|fork ID|--last`: resume a KB-converted copy of the thread.
 
     The original thread stays as it is. Codex creates a new thread holding the
-    original's effective history with the KB inserted where a new KB session has it.
+    original's effective history with the KB inserted where a new KB session has it,
+    so a fork needs nothing more than a resume: both continue in the new thread.
     """
     import kb_codex_resume
     from kb_items import load_session_items
@@ -97,7 +98,8 @@ def run_local_resume(args, snapshot, workspace, context, *, developer_text=None)
             explicit_model=any(value.startswith("model=") for value in overrides))
     # The transcript of the original turns, written once the app-server released the thread.
     kb_codex_resume.append_events(path, session_id, events)
-    print(f"kb: {original} を KB 付きの新しいセッション {session_id} に変換しました"
+    action = "フォークしました" if request["fork"] else "変換しました"
+    print(f"kb: {original} を KB 付きの新しいセッション {session_id} に{action}"
           f"（元のセッションは変更していません。続きは kb {args.name} codex resume {session_id}）",
           file=sys.stderr, flush=True)
     command = with_config(resume_command(args.native_args, session_id)[1:], kb_codex.config_flags())

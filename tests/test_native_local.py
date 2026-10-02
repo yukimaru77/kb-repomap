@@ -94,27 +94,41 @@ class NativeLocalTests(unittest.TestCase):
 
     def test_resume_forms_are_described_and_rewritten_to_the_converted_session(self):
         cases = [
-            (["resume", "old"], {"thread": "old", "last": False, "all": False, "exec": False},
+            (["resume", "old"], {"thread": "old", "last": False, "all": False, "exec": False, "fork": False},
              ["codex", "resume", "new"]),
             (["-m", "model", "resume", "-m", "other", "old", "continue"],
-             {"thread": "old", "last": False, "all": False, "exec": False},
+             {"thread": "old", "last": False, "all": False, "exec": False, "fork": False},
              ["codex", "-m", "model", "resume", "new", "-m", "other", "continue"]),
-            (["resume", "--last", "--all", "prompt"], {"thread": None, "last": True, "all": True, "exec": False},
+            (["resume", "--last", "--all", "prompt"], {"thread": None, "last": True, "all": True, "exec": False, "fork": False},
              ["codex", "resume", "new", "--all", "prompt"]),
             (["exec", "--json", "resume", "old", "question"],
-             {"thread": "old", "last": False, "all": False, "exec": True},
+             {"thread": "old", "last": False, "all": False, "exec": True, "fork": False},
              ["codex", "exec", "--json", "resume", "new", "question"]),
-            (["exec", "resume", "--last", "-"], {"thread": None, "last": True, "all": False, "exec": True},
+            (["exec", "resume", "--last", "-"], {"thread": None, "last": True, "all": False, "exec": True, "fork": False},
              ["codex", "exec", "resume", "new", "-"]),
+            # A fork is resumed as the converted (already new) thread.
+            (["fork", "old"], {"thread": "old", "last": False, "all": False, "exec": False, "fork": True},
+             ["codex", "resume", "new"]),
+            (["-m", "model", "fork", "--last", "--all", "-C", "dir", "go on"],
+             {"thread": None, "last": True, "all": True, "exec": False, "fork": True},
+             ["codex", "-m", "model", "resume", "new", "-C", "dir", "go on"]),
+            (["exec", "--json", "fork", "-m", "other", "old", "question"],
+             {"thread": "old", "last": False, "all": False, "exec": True, "fork": True},
+             ["codex", "exec", "--json", "resume", "new", "-m", "other", "question"]),
+            (["exec", "fork", "old", "--", "-literal"],
+             {"thread": "old", "last": False, "all": False, "exec": True, "fork": True},
+             ["codex", "exec", "resume", "new", "--", "-literal"]),
         ]
         for args, request, command in cases:
             with self.subTest(args=args):
                 self.assertEqual(native.resume_request(args), request)
                 self.assertEqual(native.resume_command(args, "new"), command)
-        for args in (["exec", "hello"], ["fork", "old"], ["exec", "fork", "old"], ["hello"]):
+        for args in (["exec", "hello"], ["exec", "review"], ["hello"]):
             self.assertIsNone(native.resume_request(args))
         with self.assertRaisesRegex(ValueError, "--last"):
             native.resume_request(["resume"])
+        with self.assertRaisesRegex(ValueError, "codex fork .*--last"):
+            native.resume_request(["exec", "fork"])
 
     def test_unknown_options_reach_native_validation_and_missing_values_fail_early(self):
         self.assertEqual(native.command(["exec", "--future-unknown", "hello"], "seed"),

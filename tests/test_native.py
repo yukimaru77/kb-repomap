@@ -45,13 +45,21 @@ class NativeTests(unittest.TestCase):
                 self.assertEqual(stdin.tell(), 0)
 
     def test_local_resume_converts_the_thread_and_resumes_the_copy(self):
+        for verb, fork, action in (("resume", False, "変換しました"), ("fork", True, "フォークしました")):
+            with self.subTest(verb=verb):
+                stderr, convert, request = self.run_local_conversion(verb, fork)
+                self.assertEqual(convert.call_args.args[3], request)
+                self.assertIn(f"old-id を KB 付きの新しいセッション new-id に{action}", stderr)
+                self.assertIn("kb example codex resume new-id", stderr)
+
+    def run_local_conversion(self, verb, fork):
         import kb_codex_resume
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             snapshot = root / "kb.json"
             snapshot.write_text('[{"type":"compaction","encrypted_content":"opaque"}]')
-            args = kb_native.parse(["example", "codex", "exec", "resume", "old-id", "question"])
-            request = {"thread": "old-id", "last": False, "all": False, "exec": True}
+            args = kb_native.parse(["example", "codex", "exec", verb, "old-id", "question"])
+            request = {"thread": "old-id", "last": False, "all": False, "exec": True, "fork": fork}
             with mock.patch.object(kb_native_local, "resume_request", return_value=request), \
                  mock.patch.object(kb_native_local, "resume_command",
                                    return_value=["codex", "exec", "resume", "new-id", "question"]), \
@@ -67,11 +75,9 @@ class NativeTests(unittest.TestCase):
         kb_items = convert.call_args.args[1]
         self.assertEqual([item.get("type") for item in kb_items], ["compaction", "message", "message"])
         self.assertEqual([item["content"][0]["text"] for item in kb_items[1:]], ["GUIDE", "SOURCE DIFF"])
-        self.assertEqual(convert.call_args.args[3], request)
         append.assert_called_once_with("/new.jsonl", "new-id", ["event"])
         execute.assert_called_once_with("codex", ["codex", "exec", "resume", "new-id", "question"])
-        self.assertIn("old-id", stderr.getvalue())
-        self.assertIn("new-id", stderr.getvalue())
+        return stderr.getvalue(), convert, request
 
     def test_codex_boundary_preserves_all_native_arguments(self):
         tail = ["exec", "--json", "-m", "gpt-6-astra", "-c", 'model_reasoning_effort="low"',
