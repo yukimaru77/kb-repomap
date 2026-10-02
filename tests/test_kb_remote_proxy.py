@@ -76,6 +76,11 @@ class CodexInjectorTests(unittest.TestCase):
         self.assertEqual((found["session"], found["thread"], found["parent"], found["kind"]),
                          ("s-header", "t-body", "p", "compaction"))
         self.assertEqual(found["sources"]["thread"], "client_metadata.thread_id")
+        self.assertEqual(found["forked"], "")
+        fork = {"X-Codex-Turn-Metadata": json.dumps({"thread_id": "new", "forked_from_thread_id": "source"})}
+        found = proxy.codex_identity(fork, {})
+        self.assertEqual((found["thread"], found["forked"]), ("new", "source"))
+        self.assertEqual(found["sources"]["forked"], "X-Codex-Turn-Metadata.forked_from_thread_id")
 
 
 class CodexProxyTests(unittest.TestCase):

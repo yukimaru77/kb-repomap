@@ -25,11 +25,12 @@ def notice(message):
 # --- argv -----------------------------------------------------------------
 
 def codex_resume_id(native_args):
-    """Return (is a resume, explicit session id or None) for native Codex arguments."""
+    """Return (is a resume or fork, explicit session id or None) for native Codex arguments."""
     options = native_args[:native_args.index("--")] if "--" in native_args else native_args
-    if "resume" not in options:
+    verb = next((index for index, token in enumerate(options) if token in ("resume", "fork")), None)
+    if verb is None:
         return False, None
-    for token in native_args[native_args.index("resume") + 1:]:
+    for token in native_args[verb + 1:]:
         if UUID.match(token):
             return True, token
     return True, None
@@ -92,8 +93,10 @@ def claude_block(config, record):
 class CodexBinder:
     """Observe Codex requests: bind their session ids and pick the KB items.
 
-    With `record` (new session or explicit resume) the items are fixed up front.
-    Without it the first observed session/thread/parent id selects a binding.
+    With `record` (new session or explicit resume/fork) the items are fixed up front.
+    Without it the first observed thread/session/fork-source/parent id selects a
+    binding; the ids of the request are then bound to it, so a fork's new thread
+    inherits the KB of the thread it was forked from.
     """
 
     def __init__(self, config, record=None, items=None):
@@ -139,7 +142,7 @@ class CodexBinder:
 
     def _resolve(self, identity):
         self.resolved = True
-        for key in ("thread", "session", "parent"):
+        for key in ("thread", "session", "forked", "parent"):
             session_id = identity[key]
             record = proxy.read_binding(session_id, "codex") if session_id else None
             if record:
@@ -149,7 +152,8 @@ class CodexBinder:
                     proxy.log(f"codex resume {session_id}: KB unavailable: {error}")
                     return
                 self.record = record
-                proxy.log(f"codex resume {session_id} ({identity['sources'].get(key)}) -> {record['name']}")
+                what = "fork source" if key == "forked" else "resume"
+                proxy.log(f"codex {what} {session_id} ({identity['sources'].get(key)}) -> {record['name']}")
                 return
         proxy.log(f"codex resume: no kb binding for {identity.get('thread') or identity.get('session')}; not injecting")
 
@@ -157,13 +161,18 @@ class CodexBinder:
         return self.cached
 
 
+def _codex_fork(native_args):
+    options = native_args[:native_args.index("--")] if "--" in native_args else native_args
+    return next((token for token in options if token in ("resume", "fork")), None) == "fork"
+
+
 def resume_codex(native_args, config, *, runner=None):
     import kb_codex
     import kb_native
     is_resume, session_id = codex_resume_id(native_args)
     if not is_resume:
-        raise ValueError("kb --remote codex はセッションの再開専用です: kb --remote codex resume [ID]。"
-                         "新規セッションは kb NAME --remote codex ...")
+        raise ValueError("kb --remote codex はセッションの再開・フォーク専用です: "
+                         "kb --remote codex resume|fork [ID]。新規セッションは kb NAME --remote codex ...")
     workspace = Path.cwd()
     binder = CodexBinder(config)
     if session_id:
@@ -172,7 +181,8 @@ def resume_codex(native_args, config, *, runner=None):
             notice(f"kb: {session_id} はkbの --remote セッションではないため、KBを挿入せずに起動します")
             command = kb_native.with_config(native_args, kb_codex.config_flags())
             return proxy.run_client(command, dict(os.environ), workspace, runner)
-        notice(f"KB: {record['name']}/{record['file']} (binding {session_id}) の最新内容を挿入して再開します")
+        action = "フォークします（新しいセッションにもbindingを書きます）" if _codex_fork(native_args) else "再開します"
+        notice(f"KB: {record['name']}/{record['file']} (binding {session_id}) の最新内容を挿入して{action}")
         binder = CodexBinder(config, record, codex_items(config, record))
     return kb_native.launch_remote(native_args, binder, workspace, runner=runner)
 

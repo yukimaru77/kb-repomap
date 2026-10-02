@@ -47,6 +47,10 @@ class ArgvTests(unittest.TestCase):
         self.assertEqual(kb_resume.codex_resume_id(["exec", "resume", "--last", "hi"]), (True, None))
         self.assertEqual(kb_resume.codex_resume_id(["resume"]), (True, None))
         self.assertEqual(kb_resume.codex_resume_id(["exec", "hi"]), (False, None))
+        self.assertEqual(kb_resume.codex_resume_id(["fork", SID, "go on"]), (True, SID))
+        self.assertEqual(kb_resume.codex_resume_id(["-m", "x", "fork", "--last", "--all"]), (True, None))
+        self.assertEqual(kb_resume.codex_resume_id(["exec", "fork", SID, "hi"]), (True, SID))
+        self.assertEqual(kb_resume.codex_resume_id(["exec", "--", "fork"]), (False, None))
 
     def test_claude_resume_ids(self):
         self.assertEqual(kb_resume.claude_resume_id(["--resume", SID, "-p", "x"]), (True, SID))
@@ -68,9 +72,9 @@ class ArgvTests(unittest.TestCase):
         resume.assert_called_once_with("claude", ["--resume", SID], {})
 
     def test_resume_without_resume_verb_is_rejected(self):
-        with self.assertRaisesRegex(ValueError, "再開専用"):
+        with self.assertRaisesRegex(ValueError, "専用"):
             kb_resume.resume_codex(["exec", "hi"], {})
-        with self.assertRaisesRegex(ValueError, "再開専用"):
+        with self.assertRaisesRegex(ValueError, "専用"):
             kb_resume.resume_claude(["-p", "hi"], {})
 
 
@@ -124,6 +128,37 @@ class CodexResumeTests(Isolated):
         _code, seen, _items = self.run_codex(["resume"])
         self.assertEqual(seen["payload"], {"client": "codex", "record": None, "items": None})
         self.assertEqual(self.addon_items({"Thread-Id": SID}), ITEMS)
+
+    def test_known_id_fork_binds_the_new_thread_to_the_source_kb(self):
+        proxy.write_binding(SID, "codex", "octane", "pepabo", "v1.json")
+        _code, seen, _items = self.run_codex(["fork", SID, "go on"])
+        self.assertEqual(seen["command"], ["codex", "fork", SID, "go on"])
+        self.assertEqual(seen["payload"]["items"], ITEMS)
+        self.assertIn("フォーク", sys.stderr.getvalue())
+        # What the addon's binder does with the fork's first request (a new thread id).
+        binder = kb_resume.CodexBinder({}, seen["payload"]["record"], seen["payload"]["items"])
+        binder.observe_payload({}, {"client_metadata": {"thread_id": OTHER, "session_id": OTHER}})
+        self.assertEqual(binder.items({}, {}), ITEMS)
+        record = proxy.read_binding(OTHER, "codex")
+        self.assertEqual((record["name"], record["store"], record["file"]), ("octane", "pepabo", "v1.json"))
+
+    def test_lazy_fork_resolves_the_source_from_forked_from_thread_id(self):
+        proxy.write_binding(SID, "codex", "octane", "pepabo", "v1.json")
+        _code, seen, _items = self.run_codex(["fork", "--last"])
+        self.assertIsNone(seen["payload"]["record"])
+        turn = json.dumps({"thread_id": OTHER, "session_id": OTHER, "forked_from_thread_id": SID})
+        for headers, payload in (({"X-Codex-Turn-Metadata": turn}, {"input": [USER]}),
+                                 ({}, {"client_metadata": {"thread_id": OTHER, "x-codex-turn-metadata": turn}})):
+            with self.subTest(headers=headers):
+                proxy.binding_path(OTHER).unlink(missing_ok=True)
+                binder = kb_resume.CodexBinder({}, None, None)
+                with mock.patch.object(kb_resume, "codex_items", return_value=ITEMS) as items:
+                    binder.observe_payload(headers, payload)
+                self.assertEqual(items.call_args.args[1]["name"], "octane")
+                self.assertEqual(binder.items({}, {}), ITEMS)
+                record = proxy.read_binding(OTHER, "codex")
+                self.assertEqual((record["name"], record["file"]), ("octane", "v1.json"))
+                self.assertEqual(proxy.read_binding(SID, "codex")["file"], "v1.json")
 
     def test_lazy_unknown_session_is_forwarded_unchanged(self):
         proxy.write_binding(SID, "codex", "octane", None, "latest.json")

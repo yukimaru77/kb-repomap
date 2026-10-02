@@ -256,9 +256,9 @@ def is_codex_responses(method, path):
 
 
 def codex_identity(headers, payload):
-    """Codex request identity from its headers and body: session, thread, parent and request kind."""
+    """Codex request identity from its headers and body: session, thread, parent, fork source and request kind."""
     found = {"session": headers.get("Session-Id") or "", "thread": headers.get("Thread-Id") or "",
-             "parent": headers.get("X-Codex-Parent-Thread-Id") or "", "kind": ""}
+             "parent": headers.get("X-Codex-Parent-Thread-Id") or "", "forked": "", "kind": ""}
     sources = {key: f"{name} header" for key, name in (
         ("session", "Session-Id"), ("thread", "Thread-Id"), ("parent", "X-Codex-Parent-Thread-Id")) if found[key]}
 
@@ -266,7 +266,8 @@ def codex_identity(headers, payload):
         if not isinstance(value, dict):
             return
         for key, field in (("session", "session_id"), ("thread", "thread_id"),
-                           ("parent", "parent_thread_id"), ("kind", "request_kind")):
+                           ("parent", "parent_thread_id"), ("forked", "forked_from_thread_id"),
+                           ("kind", "request_kind")):
             if isinstance(value.get(field), str) and value[field]:
                 found[key] = value[field]
                 sources[key] = f"{origin}.{field}"
