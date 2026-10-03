@@ -177,7 +177,7 @@ def decrypt_after_publish(name, store_name, filename, config, *, enabled=True):
     import argparse
     from kb_decrypt import decrypt
     args = argparse.Namespace(name=name, store=store_name, file=filename, rr_config=None,
-                              rr_base_url=None, origin=None, rr_key_file=None, rr_private_http=False)
+                              rr_base_url=None, rr_key_file=None, rr_private_http=False)
     print(f"Claude用の復号を作成します: {name}/{filename}（省略するには --no-decrypt）", flush=True)
     try:
         decrypt(args, config)

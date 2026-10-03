@@ -603,19 +603,6 @@ CLIの `--rr-base-url`・`--rr-key-file`・`--rr-private-http` でも指定で�
 `kb decrypt` では、CLIで指定した接続先がKBの `build_args` より優先し、
 CLIの指定がなければ環境変数、最後に `build_args` を使います。
 
-**旧名（非推奨の別名）**: 以前の名前も引き続き使えますが、新しい名前が常に優先します。
-
-| 新しい名前 | 旧名 |
-| --- | --- |
-| `KB_RR_CONFIG` / `--rr-config` | `KB_POOL_CONFIG` / `--pool-config` |
-| `KB_RR_BASE_URL` / `--rr-base-url` | `KB_POOL_ORIGIN` / `--origin`（base URL は origin + `/_pool/rr`） |
-| `KB_RR_KEY_FILE` / `--rr-key-file` | `KB_POOL_KEY_FILE` / `--key-file` |
-| `KB_RR_PRIVATE_HTTP` / `--rr-private-http` | `KB_POOL_PRIVATE_HTTP` / `--private-http` |
-
-旧形式のJSON（`origin`、`key_file` または `state_dir`、`private_http`）も `KB_RR_CONFIG`・`KB_POOL_CONFIG`
-のどちらでも読めます。`key_file` がなければ `state_dir/client.key`、`state_dir` もなければ
-`state/client.key` を使います。優先順位は低い方から **旧JSON → 旧環境変数 → 新JSON → 新環境変数** です。
-
 **初回は各PCで次の設定を行ってください。**
 
 1. 設定ディレクトリを作ります。
@@ -717,8 +704,7 @@ RRエンドポイント側の担当で、KB側ではCodexのバージョンや�
 KBが送るのは `Authorization`、`Content-Type: application/json`、`Accept: text/event-stream` です。
 WebSocket専用ヘッダーや一時的なセッションIDは、このHTTP/SSE経路にはコピーしません。
 
-環境変数 `KB_RR_CONFIG`、`KB_RR_BASE_URL`、`KB_RR_KEY_FILE`、`KB_RR_PRIVATE_HTTP=1` でも指定できます
-（旧名 `KB_POOL_*` は非推奨の別名）。
+環境変数 `KB_RR_CONFIG`、`KB_RR_BASE_URL`、`KB_RR_KEY_FILE`、`KB_RR_PRIVATE_HTTP=1` でも指定できます。
 Codex側の設定・ログイン・環境変数を変更する処理はありません。
 
 ### 作成の流れ

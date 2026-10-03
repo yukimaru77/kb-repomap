@@ -19,14 +19,10 @@ CHARTER = ("あなたはKB(知識ベース)である。与えられる文書を�
            "要約を求められたら核心を落とさない。")
 INTRO = "今からあなたに文書群を渡すので、全て精読してください。"
 
-LEGACY_RR_PATH = "/_pool/rr"  # deprecated KB_POOL_ORIGIN/origin: base URL = origin + this
-
-
 def rr_config_defaults(path):
     """Read shared RR endpoint settings afresh; paths belong to that JSON file.
 
-    {"base_url", "key_file", "private_http"}; the deprecated KB_POOL_CONFIG
-    shape {"origin", "key_file"|"state_dir", "private_http"} is also accepted.
+    {"base_url", "key_file", "private_http"}.
     """
     path = Path(path).expanduser().resolve()
     try:
@@ -35,16 +31,12 @@ def rr_config_defaults(path):
         raise ValueError(f"failed to read RR endpoint config {path}: {error}") from error
     if not isinstance(data, dict):
         raise ValueError("RR endpoint config must be a JSON object")
-    for field in ("base_url", "origin", "key_file", "state_dir"):
+    for field in ("base_url", "key_file"):
         if field in data and not isinstance(data[field], str):
             raise ValueError(f"RR endpoint config {field} must be a string")
     if "private_http" in data and not isinstance(data["private_http"], bool):
         raise ValueError("RR endpoint config private_http must be true or false")
-    if data.get("base_url"):
-        base_url, key_file = data["base_url"], data.get("key_file", "")
-    else:
-        base_url = legacy_base_url(data.get("origin", ""))
-        key_file = data.get("key_file") or str(Path(data.get("state_dir") or "state") / "client.key")
+    base_url, key_file = data.get("base_url", ""), data.get("key_file", "")
     if key_file:
         key_path = Path(key_file).expanduser()
         key_file = str(key_path if key_path.is_absolute() else path.parent / key_path)
@@ -52,19 +44,9 @@ def rr_config_defaults(path):
             "private_http": "1" if data.get("private_http", False) else "0"}
 
 
-def legacy_base_url(origin):
-    origin = (origin or "").rstrip("/")
-    return origin + LEGACY_RR_PATH if origin else ""
-
-
 def _rr_layers(environ):
-    """Settings from lowest to highest precedence: old JSON, old fields, new JSON, new fields."""
+    """Settings from the shared RR JSON, overridden by explicit RR fields."""
     layers = []
-    if environ.get("KB_POOL_CONFIG"):
-        layers.append(rr_config_defaults(environ["KB_POOL_CONFIG"]))
-    layers.append({"base_url": legacy_base_url(environ.get("KB_POOL_ORIGIN")),
-                   "key_file": environ.get("KB_POOL_KEY_FILE"),
-                   "private_http": environ.get("KB_POOL_PRIVATE_HTTP")})
     if environ.get("KB_RR_CONFIG"):
         layers.append(rr_config_defaults(environ["KB_RR_CONFIG"]))
     layers.append({"base_url": environ.get("KB_RR_BASE_URL"),
@@ -107,22 +89,21 @@ def rr_configuration(environ=None):
 def check_rr_config(environ=None):
     """Planning needs no key or API, but an explicitly named config must exist."""
     environ = os.environ if environ is None else environ
-    for name in ("KB_POOL_CONFIG", "KB_RR_CONFIG"):
+    for name in ("KB_RR_CONFIG",):
         if environ.get(name):
             rr_config_defaults(environ[name])
 
 
 def add_rr_arguments(parser, *, help=True):
-    """The RR endpoint options; the --pool-config/--origin/... spellings are deprecated aliases."""
+    """The RR endpoint options."""
     def text(value):
         return value if help else argparse.SUPPRESS
-    parser.add_argument("--rr-config", "--pool-config", dest="rr_config",
+    parser.add_argument("--rr-config", dest="rr_config",
                         help=text("RR endpoint JSON {base_url, key_file, private_http}; or KB_RR_CONFIG"))
     parser.add_argument("--rr-base-url", help=text("RR endpoint base URL (kb appends /responses); or KB_RR_BASE_URL"))
-    parser.add_argument("--origin", help=argparse.SUPPRESS)  # deprecated: base URL = origin + /_pool/rr
-    parser.add_argument("--rr-key-file", "--key-file", dest="rr_key_file",
+    parser.add_argument("--rr-key-file", dest="rr_key_file",
                         help=text("RR endpoint key file; or KB_RR_KEY_FILE"))
-    parser.add_argument("--rr-private-http", "--private-http", dest="rr_private_http", action="store_true",
+    parser.add_argument("--rr-private-http", dest="rr_private_http", action="store_true",
                         help=text("the http base URL is inside a verified private tunnel"))
 
 
@@ -133,8 +114,8 @@ def apply_rr_arguments(args, environ=None, *, override=True, resolve=True):
     values = {}
     if getattr(args, "rr_config", None) is not None:
         values["KB_RR_CONFIG"] = path(args.rr_config)
-    if getattr(args, "rr_base_url", None) or getattr(args, "origin", None):
-        values["KB_RR_BASE_URL"] = args.rr_base_url or legacy_base_url(args.origin)
+    if getattr(args, "rr_base_url", None):
+        values["KB_RR_BASE_URL"] = args.rr_base_url
     if getattr(args, "rr_key_file", None):
         values["KB_RR_KEY_FILE"] = path(args.rr_key_file)
     if getattr(args, "rr_private_http", False):
