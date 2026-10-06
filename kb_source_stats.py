@@ -7,7 +7,7 @@ import json
 from pathlib import Path
 
 import kb_api
-from kb_repo import file_block, git, repomix_candidates, skip_reason, tracked_files
+from kb_repo import file_block, git, linguist_generated, repomix_candidates, skip_reason, tracked_files
 
 
 def source_stats(repo, max_file_bytes):
@@ -21,7 +21,9 @@ def source_stats(repo, max_file_bytes):
     source_tokens = 0
     skipped = Counter()
     candidates = repomix_candidates(repo)
-    for rel in tracked_files(repo):
+    tracked = tracked_files(repo)
+    generated_paths = linguist_generated(repo, tracked)
+    for rel in tracked:
         path = repo / rel.as_posix()
         if not path.is_file():
             continue
@@ -29,7 +31,7 @@ def source_stats(repo, max_file_bytes):
             skipped["repomix filter"] += 1
             continue
         data = path.read_bytes()
-        reason = skip_reason(rel, data, max_file_bytes)
+        reason = skip_reason(rel, data, max_file_bytes, repo=repo, generated_paths=generated_paths)
         if reason:
             skipped[reason] += 1
             continue

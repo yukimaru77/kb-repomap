@@ -292,6 +292,26 @@ KBと同じ保存先commitから取得し、元資料のリポジトリや現在
 新構文のRemote KBでは `dev.txt` もプロキシが挿入し、旧構文でもセッション側には
 KBの項目を保存せず、プロキシが全項目を挿入します。
 KBの準備だけでは user メッセージや推論を自動で開始しません。
+
+起動ごとに意思決定記録などを追加する場合は、`--append-dev TEXT` または
+`--append-dev-file PATH` を指定します。既存の保存先 `dev.txt` の後ろに、
+指定順で空行を挟んで追加します。両方とも繰り返し指定でき、Codex・Claude、
+ローカル・`--remote` の各起動で使えます。KB保存先のファイルは変更しません。
+
+```bash
+kb octane --remote --append-dev-file ./decisions.txt codex --yolo
+kb octane --remote --append-dev '今回の対象はGateway APIのみです。' claude
+kb codex octane --append-dev-file ./decisions.txt --session-only
+```
+
+新構文では追加オプションを `codex` / `claude` より前に置きます。
+ファイルはUTF-8で、相対パスはコマンド実行時のディレクトリ基準です
+（`--workspace` 基準ではありません）。読めない場合は起動せずエラーにします。
+空の文章・空白だけのファイルは追加しません。
+追加内容はKBの共有設定やremote再開用bindingへ保存しません。
+再開時にも同じ内容を渡すには、KB名付きの起動コマンドで再度指定してください。
+ローカルCodexでは初期履歴へ保存され、Claudeでは起動コンテキストへ、
+remoteではそのプロセスの推論リクエストへ追加されます。
 新構文の依頼文・標準入力はCodex自身へ渡し、旧構文は明示した `--prompt` だけを実行します。
 
 新旧の起動構文・TUI・`exec`・`--app`・`--remote` で共通です。

@@ -11,6 +11,7 @@ import sys
 import uuid
 
 import kb_codex
+import kb_developer
 import kb_store as store
 from kb_items import DEFAULT_DEVELOPER_TEXT, REPO_MAP_HEADER, dump_items, load_items
 import kb_api
@@ -42,6 +43,8 @@ def rebuild(name, info, commit, config, previous=None):
                "--workspace", str(build_root / "repos"), "--no-mint"]
     if reusable:
         command += ["--reuse-manifest", str(reuse_file)]
+    for pattern in info.get("exclude", []):
+        command += ["--exclude", pattern]
     if previous and not reusable:
         print("前回KBのパック対応情報が使えないため、全体を作り直します。", flush=True)
     subprocess.run(command, env=env, check=True)
@@ -102,6 +105,8 @@ def register(args, config):
             number += 1
         selected = {"name": candidate, "url": url}
     info = {"repository_url": repository_url, "source_commit": None, "branch": branch}
+    if getattr(args, "exclude", None):
+        info["exclude"] = args.exclude
     revision = store.publish(selected, name, info, create_only=True)
     if selected not in entries:
         entries.append(selected)
@@ -270,6 +275,7 @@ def launch(args, config):
 
 
 def _launch(args, config):
+    additions = kb_developer.read_additions(args)
     loaded = store.find_kb(config, args.name, args.store, filename=args.file)
     info, jsonl = loaded["info"], loaded["jsonl"]
     print(f"KB: {args.name}/{args.file} / store: {loaded['store']['name']}", flush=True)
@@ -309,6 +315,8 @@ def _launch(args, config):
     if loaded.get("developer_text") and loaded["developer_text"].strip():
         developer["developer_text"] = loaded["developer_text"]
         print(f"Developer instructions: {args.name}/dev.txt", flush=True)
+    if additions:
+        developer["developer_text"] = kb_developer.append_text(developer.get("developer_text"), additions)
     if hasattr(args, "native_args"):
         from kb_native import run
         return run(args, config, jsonl, workspace, context, **developer)
@@ -339,7 +347,8 @@ def main(argv=None):
         # Resume a kb --remote session by its saved binding; the KB name is not needed.
         from kb_resume import main as resume
         raise SystemExit(resume(argv[1], argv[2:], store.read_config()))
-    if len(argv) > 1 and argv[0] not in management and "codex" in argv[1:]:
+    boundary = kb_developer.client_boundary(argv)
+    if boundary is not None and argv[0] not in management and argv[boundary] == "codex":
         from kb_native import parse
         args = parse(argv)
         # Help/version are native operations and should work without a KB lookup.
@@ -351,14 +360,14 @@ def main(argv=None):
         if args.remote:
             raise SystemExit(code)
         return code
-    if len(argv) > 1 and argv[0] not in management and "claude" in argv[1:]:
+    if boundary is not None and argv[0] not in management and argv[boundary] == "claude":
         from kb_claude import start
-        boundary = argv.index("claude", 1)
         parser = argparse.ArgumentParser(prog="kb NAME [KB options] claude [CLAUDE args...]", allow_abbrev=False)
         parser.add_argument("name", type=store.name_value)
         parser.add_argument("--store")
         parser.add_argument("--file", default="latest.json", type=file_argument)
         parser.add_argument("--workspace", default=".")
+        kb_developer.add_arguments(parser)
         parser.add_argument("--remote", action="store_true",
                             help="ローカルのプロキシ経由で各リクエストのsystemにKBを挿入する")
         args = parser.parse_args(argv[:boundary])
@@ -380,10 +389,16 @@ def main(argv=None):
     registration.add_argument("--host", help="SSHマシン名（user@hostやSSH別名）")
     registration.add_argument("--path", help="SSH先のGitリポジトリ絶対パス")
     registration.add_argument("--branch", help="基準ブランチ（省略時は質問）")
+    registration.add_argument("--exclude", action="append", metavar="PATTERN",
+                              help="KBに入れないパス（先頭一致、または * を含むglob）。複数指定可")
     creation = commands.add_parser("create", help="登録済みKBを基準ブランチから作成・保存")
     creation.add_argument("name", type=store.name_value)
     creation.add_argument("--store")
     creation.add_argument("--clean", action="store_true", help="前回blobを再利用せず全体を作り直す")
+    exclusion = creation.add_mutually_exclusive_group()
+    exclusion.add_argument("--exclude", action="append", metavar="PATTERN",
+                           help="KBに入れないパス（先頭一致、または * を含むglob）。指定すると保存済みの一覧を置き換える")
+    exclusion.add_argument("--no-exclude", action="store_true", help="保存済みの除外一覧を消す")
     creation.add_argument("--tree-files", action="store_true",
                           help="既定dev.txtのリポジトリ構成にファイルも含める（既定はディレクトリのみ）")
     dev_init = commands.add_parser("dev-init", help="既定のdev.txt（案内文＋作成commitのリポジトリ構成）を保存")
@@ -431,6 +446,7 @@ def main(argv=None):
     mode.add_argument("--app", action="store_true")
     codex.add_argument("--no-yolo", action="store_true")
     codex.add_argument("--prompt")
+    kb_developer.add_arguments(codex)
     codex.add_argument("--remote", action="store_true", help="kbのローカルプロキシで推論時だけKBを挿入する")
     for command in (creation, publish, paper_publish):
         command.add_argument("--no-decrypt", action="store_true",
@@ -449,6 +465,12 @@ def main(argv=None):
         loaded = store.find_kb(config, args.name, args.store, download=False)
         if loaded["info"].get("source_kind") == "paper":
             raise ValueError("論文KBはpaper-kbで作成し、--publishで保存してください")
+        if args.exclude:
+            loaded["info"]["exclude"] = args.exclude
+        elif args.no_exclude:
+            loaded["info"].pop("exclude", None)
+        if loaded["info"].get("exclude"):
+            print("除外: " + ", ".join(loaded["info"]["exclude"]), flush=True)
         previous = None if args.clean else previous_kb(config, args.name, args.store, args.file)
         create_kb(args.name, loaded, store.source_head(loaded["info"]), config, args.file,
                   previous=previous, clean=args.clean, tree_files=args.tree_files)

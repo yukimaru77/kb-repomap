@@ -4,6 +4,7 @@ from pathlib import Path
 import uuid
 
 import kb_claude
+import kb_developer
 import kb_resume
 import kb_remote_proxy as proxy
 import kb_store as store
@@ -39,7 +40,9 @@ def make_server(block, upstream=None):
 def start_remote(args, config, runner=None):
     if any(token == "--session-id" or token.startswith("--session-id=") for token in args.claude_args):
         raise ValueError("--session-id はkbが作成するため、Claude側では指定しないでください")
+    additions = kb_developer.read_additions(args)
     loaded = store.find_kb(config, args.name, args.store, filename=args.file)
+    loaded = {**loaded, "developer_text": kb_developer.append_text(loaded.get("developer_text"), additions)}
     context = kb_claude.build_context(loaded, args.name, args.file)
     block = kb_block(context)
     session_id = str(uuid.uuid4())

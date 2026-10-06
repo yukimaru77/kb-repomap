@@ -365,6 +365,32 @@ class GitStoreTest(unittest.TestCase):
         self.assertEqual(loaded["store"], self.store1)
         self.assertEqual(loaded["info"]["branch"], "main")
 
+    def test_register_and_create_store_exclude_patterns_and_pass_them_to_the_builder(self):
+        kb_store.write_config(self.config)
+        with mock.patch("builtins.input", side_effect=[""]), contextlib.redirect_stdout(io.StringIO()):
+            kb_cli.main(["register", "example", "--source", str(self.source), "--branch", "main",
+                         "--exclude", "tests", "--exclude", "*/_next/*"])
+        loaded = kb_store.find_kb(self.config, "example", download=False)
+        self.assertEqual(loaded["info"]["exclude"], ["tests", "*/_next/*"])
+
+        seen = []
+        with mock.patch.object(kb_cli, "create_kb", side_effect=lambda name, loaded, *a, **k: seen.append(dict(loaded["info"]))), \
+             mock.patch.object(kb_cli, "decrypt_after_publish"), contextlib.redirect_stdout(io.StringIO()):
+            kb_cli.main(["create", "example"])
+            kb_cli.main(["create", "example", "--exclude", "ui"])
+            kb_cli.main(["create", "example", "--no-exclude"])
+        self.assertEqual([info.get("exclude") for info in seen], [["tests", "*/_next/*"], ["ui"], None])
+
+        commands = []
+        def fake_run(command, **_kwargs):
+            commands.append(command)
+            raise RuntimeError("stop")
+        with mock.patch.object(kb_cli.subprocess, "run", side_effect=fake_run), \
+             contextlib.redirect_stdout(io.StringIO()), self.assertRaisesRegex(RuntimeError, "stop"):
+            kb_cli.rebuild("example", {**self.info, "exclude": ["tests", "ui"]}, self.base, self.config)
+        tail = commands[0][commands[0].index("--no-mint"):]
+        self.assertEqual(tail[1:], ["--exclude", "tests", "--exclude", "ui"])
+
     def test_register_does_not_replace_existing_kb_or_its_metadata(self):
         kb_store.write_config(self.config)
         revision = kb_store.publish(self.store1, "example", self.info, self.json)

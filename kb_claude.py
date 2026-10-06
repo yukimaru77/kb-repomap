@@ -6,6 +6,7 @@ import subprocess
 import uuid
 
 import kb_store as store
+import kb_developer
 
 
 MAX_INLINE_CONTEXT = 500_000
@@ -69,7 +70,9 @@ def build_context(loaded, name, filename):
 def start(args, config):
     if any(token == "--session-id" or token.startswith("--session-id=") for token in args.claude_args):
         raise ValueError("--session-id はkbが作成するため、Claude側では指定しないでください")
+    additions = kb_developer.read_additions(args)
     loaded = store.find_kb(config, args.name, args.store, filename=args.file)
+    loaded = {**loaded, "developer_text": kb_developer.append_text(loaded.get("developer_text"), additions)}
     context = build_context(loaded, args.name, args.file)
     session_id = str(uuid.uuid4())
     if len(context.encode("utf-8")) <= MAX_INLINE_CONTEXT:

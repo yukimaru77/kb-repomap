@@ -5,6 +5,7 @@ import subprocess
 import sys
 
 import kb_codex
+import kb_developer
 from kb_items import developer_item
 import kb_remote_proxy as proxy
 import kb_store
@@ -12,7 +13,7 @@ from kb_remote import RemoteKB
 
 
 def parse(argv):
-    boundary = argv.index("codex", 1)
+    boundary = kb_developer.client_boundary(argv)
     parser = argparse.ArgumentParser(prog="kb NAME [KB options] codex [CODEX args]", allow_abbrev=False)
     parser.add_argument("name", type=kb_store.name_value)
     parser.add_argument("--remote", action="store_true", help="kbのローカルプロキシで推論時だけKBを挿入する")
@@ -21,6 +22,7 @@ def parse(argv):
     parser.add_argument("--workspace", default=".")
     parser.add_argument("--rebuild", choices=("never", "always"), default="never")
     parser.add_argument("--clean", action="store_true", help="再作成時に前回blobを再利用せず全体を作り直す")
+    kb_developer.add_arguments(parser)
     args = parser.parse_args(argv[:boundary])
     from kb_cli import file_argument
     args.file = file_argument(args.file)

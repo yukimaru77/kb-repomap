@@ -215,6 +215,8 @@ def main():
     parser.add_argument("--budget-tokens", type=int, help="override config chunk_tokens")
     parser.add_argument("--workers", type=int, help="override config workers")
     parser.add_argument("--max-file-bytes", type=int, help="override config max_file_bytes")
+    parser.add_argument("--exclude", action="append", default=[],
+                        help="drop matching source paths before packing (prefix or glob); repeatable")
     two_stage = parser.add_mutually_exclusive_group()
     two_stage.add_argument(
         "--two-stage", dest="two_stage", action="store_true",
@@ -303,6 +305,8 @@ def main():
     ]
     for prelude in args.prelude_file:
         command += ["--prelude-file", str(Path(prelude).expanduser().resolve())]
+    for pattern in args.exclude:
+        command += ["--exclude", pattern]
     if args.reuse_manifest:
         command += ["--reuse-manifest", str(Path(args.reuse_manifest).expanduser().resolve())]
     for option, value in (("--reading-instructions-file", args.reading_instructions_file),
