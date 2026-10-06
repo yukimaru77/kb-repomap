@@ -45,8 +45,8 @@ grouping without token measurements. Token grouping retains its measured-token r
 ## Live pool / upstream test
 
 ```sh
-uv run python scripts/live-check.py --origin http://TAILSCALE-HOST:18473 \
-  --private-http --key-file /path/to/pool-client.key --output state/live-check.json
+uv run python scripts/live-check.py --rr-base-url http://TAILSCALE-HOST:18473/_pool/rr \
+  --rr-private-http --rr-key-file /path/to/pool-client.key --output state/live-check.json
 ```
 
 Executed against the user's running Tailscale pool with `gpt-5.6-sol`, `high`.
