@@ -238,6 +238,24 @@ commitを固定して登録します。別の履歴の上流リポジトリを�
 `kb codex --rebuild always` は論文KBでは使用しません。
 
 
+### 他のクライアント向けに保存済みKBを取得する
+
+```bash
+kb export octane
+kb export octane --store research --file v1.00
+```
+
+標準出力にJSONを1個返します。`version: 1`、`name`、`store`、`store_revision`、
+`file`（実際に取得したファイル名）、`info`、`items`を含みます。
+`items`は暗号化Blobとユーザー項目を元の順序・フィールドのまま保持し、
+最後に保存先の`dev.txt`をdeveloperメッセージとして追加します。
+旧形式のKB憲章は除外し、`dev.txt`がない場合はdeveloper項目を追加しません。
+
+Codexの起動、KBの再作成、元リポジトリの更新差分取得、保存先への書き込みは行いません。
+保存先Gitの取得とローカルキャッシュの更新だけを行います。`dev.txt`もsnapshotと同じ
+保存先commitから取得します。名前付きsnapshotを選んだ場合も、`dev.txt`は保存先の
+現在の内容です。エラーは標準エラー出力に返します。
+
 ### 推論時だけKBを挿入する（`--remote`）
 
 新しい起動構文は `kb <KB名> [KBオプション] codex [Codexの引数...]` です。

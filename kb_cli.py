@@ -13,7 +13,7 @@ import uuid
 import kb_codex
 import kb_developer
 import kb_store as store
-from kb_items import DEFAULT_DEVELOPER_TEXT, REPO_MAP_HEADER, dump_items, load_items
+from kb_items import DEFAULT_DEVELOPER_TEXT, REPO_MAP_HEADER, dump_items, load_items, load_session_items
 import kb_api
 from kb_api import COMPACTION_TYPES
 from kb_fork_mint import CHARTER
@@ -26,6 +26,21 @@ BUILD_ROOT = Path.home() / ".local/share/kb/builds"
 
 def file_argument(value):
     return store.jsonl_filename(value if value.endswith((".json", ".jsonl")) else value + ".json")
+
+
+def export_kb(args, config):
+    """Read stored context for another client; never rebuild or launch a session."""
+    loaded = store.find_kb(config, args.name, args.store, filename=args.file)
+    result = {
+        "version": 1,
+        "name": args.name,
+        "store": loaded["store"]["name"],
+        "store_revision": loaded["store_revision"],
+        "file": loaded["jsonl"].name,
+        "info": loaded["info"],
+        "items": load_session_items(loaded["jsonl"], developer_text=loaded["developer_text"]),
+    }
+    print(json.dumps(result, ensure_ascii=False))
 
 
 def rebuild(name, info, commit, config, previous=None):
@@ -342,7 +357,7 @@ def _launch(args, config):
 def main(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
     management = {"register", "create", "dev-init", "store", "list", "publish", "publish-paper", "codex", "claude", "decrypt",
-                  "ca-setup"}
+                  "ca-setup", "export"}
     if argv[:1] == ["--remote"] and argv[1:2] and argv[1] in ("codex", "claude"):
         # Resume a kb --remote session by its saved binding; the KB name is not needed.
         from kb_resume import main as resume
@@ -417,6 +432,10 @@ def main(argv=None):
     remove.add_argument("name")
     listing = commands.add_parser("list", help="保存先にあるKBを一覧表示")
     listing.add_argument("--store")
+    exporting = commands.add_parser("export", help="保存済みKBのBlob列とdev.txtをJSONで出力（起動・再作成なし）")
+    exporting.add_argument("name", type=store.name_value)
+    exporting.add_argument("--store")
+    exporting.add_argument("--file", default="latest.json", type=file_argument)
     publish = commands.add_parser("publish", help="KB項目列と元データ情報を保存（旧JSONLも読込可）")
     publish.add_argument("name", type=store.name_value)
     publish.add_argument("--store")
@@ -461,6 +480,8 @@ def main(argv=None):
     config = store.read_config()
     if args.command == "register":
         register(args, config)
+    elif args.command == "export":
+        export_kb(args, config)
     elif args.command == "create":
         loaded = store.find_kb(config, args.name, args.store, download=False)
         if loaded["info"].get("source_kind") == "paper":
