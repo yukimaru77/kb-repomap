@@ -43,6 +43,35 @@ class ExportTest(unittest.TestCase):
                     {"type": "input_text", "text": "保存済みの指示"}]}],
             })
 
+    def test_decrypted_export_emits_build_context_text(self):
+        loaded = {"jsonl": Path("/store/example/v2.json"), "developer_text": "dev", "store": {"name": "research"},
+                  "store_revision": "abc123", "info": {"source_commit": "def456"}}
+        output = io.StringIO()
+        with mock.patch.object(kb_cli.store, "read_config", return_value={}), \
+                mock.patch.object(kb_cli.store, "find_kb", return_value=loaded), \
+                mock.patch("kb_claude.build_context", return_value="## Decrypted KB material: a\n\nbody\n") as build, \
+                mock.patch.object(kb_cli, "load_session_items") as items, \
+                contextlib.redirect_stdout(output):
+            kb_cli.main(["export", "example", "--store", "research", "--file", "v2", "--decrypted"])
+        build.assert_called_once_with(loaded, "example", "v2.json")
+        items.assert_not_called()
+        self.assertEqual(json.loads(output.getvalue()), {
+            "version": 2, "kind": "decrypted", "name": "example", "store": "research",
+            "store_revision": "abc123", "file": "v2.json", "info": {"source_commit": "def456"},
+            "text": "## Decrypted KB material: a\n\nbody\n",
+        })
+
+    def test_decrypted_export_without_plaintext_emits_no_json(self):
+        loaded = {"jsonl": Path("/store/example/latest.json"), "developer_text": None, "store": {"name": "first"},
+                  "store_revision": "abc123", "info": {}}
+        output = io.StringIO()
+        with mock.patch.object(kb_cli.store, "read_config", return_value={}), \
+                mock.patch.object(kb_cli.store, "find_kb", return_value=loaded), \
+                mock.patch("kb_claude._decrypt_files", return_value=[]), \
+                contextlib.redirect_stdout(output), self.assertRaisesRegex(ValueError, "復号済みKBがありません"):
+            kb_cli.main(["export", "example", "--decrypted"])
+        self.assertEqual(output.getvalue(), "")
+
     def test_invalid_snapshot_emits_no_partial_json(self):
         with tempfile.TemporaryDirectory() as directory:
             snapshot = Path(directory) / "latest.jsonl"

@@ -31,6 +31,21 @@ def file_argument(value):
 def export_kb(args, config):
     """Read stored context for another client; never rebuild or launch a session."""
     loaded = store.find_kb(config, args.name, args.store, filename=args.file)
+    if getattr(args, "decrypted", False):
+        # Plaintext for clients that do not carry compaction blobs; same text as `kb claude`.
+        from kb_claude import build_context
+        result = {
+            "version": 2,
+            "kind": "decrypted",
+            "name": args.name,
+            "store": loaded["store"]["name"],
+            "store_revision": loaded["store_revision"],
+            "file": loaded["jsonl"].name,
+            "info": loaded["info"],
+            "text": build_context(loaded, args.name, args.file),
+        }
+        print(json.dumps(result, ensure_ascii=False))
+        return
     result = {
         "version": 1,
         "name": args.name,
@@ -436,6 +451,8 @@ def main(argv=None):
     exporting.add_argument("name", type=store.name_value)
     exporting.add_argument("--store")
     exporting.add_argument("--file", default="latest.json", type=file_argument)
+    exporting.add_argument("--decrypted", action="store_true",
+                           help="Blobではなく復号済みKB本文とdev.txtを平文で出力")
     publish = commands.add_parser("publish", help="KB項目列と元データ情報を保存（旧JSONLも読込可）")
     publish.add_argument("name", type=store.name_value)
     publish.add_argument("--store")
