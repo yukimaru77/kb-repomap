@@ -1,4 +1,5 @@
 # Target input size for every first-stage blob, including repository-map.txt.
+# Token budgets here are doubled automatically for gpt-6.1-sol (see kb_api.CONTEXT_SCALE).
 chunk_tokens: 150000
 map_tokens: 10000
 

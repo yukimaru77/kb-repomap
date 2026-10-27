@@ -44,7 +44,8 @@ class ConfigTest(unittest.TestCase):
     def test_cli_enables_only_requested_grouping_and_still_mints(self):
         cases = [
             ([], None),
-            (["--two-stage"], ["--budget-tokens", "150000"]),
+            # config model gpt-6.1-sol has a doubled context window, so 150000 becomes 300000.
+            (["--two-stage"], ["--budget-tokens", "300000"]),
             (["--second-stage-count", "3"], ["--blob-count", "3"]),
             (["--second-stage-budget-tokens", "90000"], ["--budget-tokens", "90000"]),
             (["--no-two-stage", "--second-stage-count", "3"], None),
@@ -70,6 +71,41 @@ class ConfigTest(unittest.TestCase):
                 else:
                     self.assertEqual(len(merges), 1)
                     self.assertEqual(merges[0][-2:], expected)
+
+    def test_double_context_model_doubles_config_budgets_but_not_cli_values(self):
+        cases = [
+            ([], ["300000", "20000", "300000"]),
+            (["--model", "gpt-6-sol"], ["150000", "10000", "150000"]),
+            (["--budget-tokens", "120000", "--map-tokens", "8000"], ["120000", "8000", "300000"]),
+        ]
+        def write_map(repo, output, tokens):
+            output.parent.mkdir(parents=True, exist_ok=True)
+            output.write_text("app.py\n")
+
+        with tempfile.TemporaryDirectory() as temp:
+            source = Path(temp)
+            for options, (budget, map_tokens, merge_budget) in cases:
+                argv = ["kb_repo_url.py", str(source), "--name", "example", "--two-stage", *options]
+                with self.subTest(options=options), \
+                        mock.patch.object(kb_repo_url.sys, "argv", argv), \
+                        mock.patch.object(kb_repo_url, "clone_repository"), \
+                        mock.patch.object(kb_repo_url.subprocess, "check_output", return_value="HEAD\n"), \
+                        mock.patch.object(kb_repo_url.kb_api, "rr_configuration"), \
+                        mock.patch.object(kb_repo_url.kb_api, "STATE_ROOT", temp), \
+                        mock.patch.object(kb_repo_url, "generate_repo_map",
+                                          side_effect=write_map) as generate, \
+                        mock.patch.object(kb_repo_url, "run") as run:
+                    kb_repo_url.main()
+                commands = [call.args[0] for call in run.call_args_list]
+                build = commands[0]
+                self.assertEqual(build[build.index("--budget-tokens") + 1], budget)
+                self.assertEqual(str(generate.call_args.args[2]), map_tokens)
+                merge = [command for command in commands if "merge-old" in command][0]
+                self.assertEqual(merge[-2:], ["--budget-tokens", merge_budget])
+
+    def test_context_scale(self):
+        self.assertEqual(kb_repo_url.kb_api.context_scale("gpt-6.1-sol"), 2)
+        self.assertEqual(kb_repo_url.kb_api.context_scale("gpt-6-sol"), 1)
 
     def test_reads_edited_yaml_without_pyyaml(self):
         content = """

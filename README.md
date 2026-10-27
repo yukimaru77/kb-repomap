@@ -787,6 +787,9 @@ mapは構造・識別子の抜粋で、従来のLLMによる業務・設計解�
 
 [config.yaml](config.yaml) の既定値は `gpt-6.1-sol / xhigh`、最大12並列、map予算10K、
 一次パック予算150K、**二次圧縮なし**です。
+`gpt-6.1-sol` はコンテキスト長が2倍(500K)なので、このモデルのときは config/既定値由来の
+token予算(`chunk_tokens`・`map_tokens`・`two_stage.token_budget`・`merge-old`/`build` の既定値)を
+自動で2倍にします(`kb_api.CONTEXT_SCALE`)。CLIで明示した値はそのまま使います。
 
 通常の作成コマンドに、必要な場合だけ次のどちらかを追加します。
 

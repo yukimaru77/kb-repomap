@@ -421,7 +421,8 @@ def main():
     )
     parser.add_argument("--name", required=True)
     parser.add_argument("--reuse-manifest", help="previous pack-to-blob mapping")
-    parser.add_argument("--budget-tokens", type=int, default=150_000)
+    parser.add_argument("--budget-tokens", type=int,
+                        help="default 150000, doubled for double-context models")
     parser.add_argument("--max-file-bytes", type=int, default=600_000)
     parser.add_argument("--thin-threshold", type=int, default=2_000)
     parser.add_argument("--model", default=kb_api.DEFAULT_MODEL)
@@ -433,6 +434,8 @@ def main():
     parser.add_argument("--exclude", action="append", default=[],
                         help="drop matching paths (prefix, or fnmatch glob); repeatable")
     args = parser.parse_args()
+    if args.budget_tokens is None:
+        args.budget_tokens = 150_000 * kb_api.context_scale(args.model)
 
     repo = Path(args.repo).expanduser().resolve()
     repo_map_path = Path(args.repo_map).expanduser().resolve()

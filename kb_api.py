@@ -10,6 +10,13 @@ from http.client import IncompleteRead
 COMPACTION_TYPES = {"compaction", "compaction_summary", "context_compaction"}
 DEFAULT_MODEL = "gpt-6.1-sol"
 DEFAULT_EFFORT = "xhigh"
+# Models whose context window is twice the usual one (gpt-6.1-sol: 500K vs 272K).
+# Token budgets taken from config or defaults are multiplied by this; explicit CLI values are not.
+CONTEXT_SCALE = {"gpt-6.1-sol": 2}
+
+
+def context_scale(model):
+    return CONTEXT_SCALE.get(model, 1)
 DEFAULT_COMPACT_WORKERS = 12
 COMPACT_MAX_ATTEMPTS = 6
 COMPACT_RETRY_MAX_DELAY = 30
@@ -563,7 +570,8 @@ def main():
     b.add_argument("--name", required=True); b.add_argument("--files", nargs="+", required=True)
     b.add_argument("--per-compact", type=int, default=None,
                    help="1圧縮あたりの論文数上限(省略時はトークン閾値のみで発火)")
-    b.add_argument("--budget-tokens", type=int, default=190_000)
+    b.add_argument("--budget-tokens", type=int,
+                   help="1圧縮あたりのtoken閾値(既定190000、倍コンテキストモデルでは2倍)")
     b.add_argument("--multi-blob", action="store_true",
                    help="再圧縮しない多ブロブ制: 各論文は生涯1回だけ圧縮され、ブロブを横に蓄積")
     q = sub.add_parser("ask"); q.add_argument("--name", required=True); q.add_argument("question")
@@ -572,8 +580,8 @@ def main():
     mg.add_argument("--name", required=True)
     mg.add_argument("--keep-recent", type=int, default=20, help="生のまま温存する直近ブロブ数")
     grouping = mg.add_mutually_exclusive_group()
-    grouping.add_argument("--budget-tokens", type=int, default=150_000,
-                    help="二次圧縮1回へ詰める一次blobの実測token上限")
+    grouping.add_argument("--budget-tokens", type=int,
+                    help="二次圧縮1回へ詰める一次blobの実測token上限(既定150000、倍コンテキストモデルでは2倍)")
     grouping.add_argument("--blob-count", type=int,
                     help="二次圧縮1回へ詰める一次blobの個数")
     mg.add_argument("--workers", type=int, default=DEFAULT_COMPACT_WORKERS,
@@ -587,12 +595,14 @@ def main():
     if ar.cmd == "build":
         files = []
         for pat in ar.files: files.extend(sorted(glob.glob(pat)) if any(c in pat for c in "*?[") else [pat])
-        cmd_build(ar.name, files, ar.per_compact, ar.budget_tokens, ar.multi_blob)
+        budget = ar.budget_tokens or 190_000 * context_scale(DEFAULT_MODEL)
+        cmd_build(ar.name, files, ar.per_compact, budget, ar.multi_blob)
     elif ar.cmd == "ask":
         cmd_ask(ar.name, ar.question, ar.blob_only)
     elif ar.cmd == "merge-old":
         cmd_merge_old(
-            ar.name, ar.keep_recent, ar.budget_tokens, ar.model, ar.effort, ar.workers,
+            ar.name, ar.keep_recent, ar.budget_tokens or 150_000 * context_scale(ar.model),
+            ar.model, ar.effort, ar.workers,
             blob_count=ar.blob_count,
             instructions=(Path(ar.instructions_file).expanduser().read_text(encoding="utf-8")
                           if ar.instructions_file is not None else None),

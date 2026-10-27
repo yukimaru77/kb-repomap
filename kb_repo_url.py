@@ -248,17 +248,18 @@ def main():
         kb_api.rr_configuration()
     else:
         kb_api.check_rr_config()
-    map_tokens = args.map_tokens if args.map_tokens is not None else config["map_tokens"]
     model = args.model or config["model"]
+    scale = kb_api.context_scale(model)
+    map_tokens = args.map_tokens if args.map_tokens is not None else config["map_tokens"] * scale
     effort = args.effort or config["effort"]
-    budget_tokens = args.budget_tokens or config["chunk_tokens"]
+    budget_tokens = args.budget_tokens or config["chunk_tokens"] * scale
     workers = args.workers or config["workers"]
     max_file_bytes = args.max_file_bytes or config["max_file_bytes"]
     two_stage_enabled = (
         config["two_stage_enabled"] if args.two_stage is None else args.two_stage
     )
     second_stage_mode = config["second_stage_mode"]
-    second_stage_budget_tokens = config["second_stage_budget_tokens"]
+    second_stage_budget_tokens = config["second_stage_budget_tokens"] * scale
     second_stage_count = config["second_stage_count"]
     if args.second_stage_budget_tokens is not None:
         second_stage_mode = "tokens"
