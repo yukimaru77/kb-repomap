@@ -58,9 +58,24 @@ def export_kb(args, config):
     print(json.dumps(result, ensure_ascii=False))
 
 
-def rebuild(name, info, commit, config, previous=None, knowledge=None):
-    build_root = BUILD_ROOT / name / uuid.uuid4().hex
-    build_root.mkdir(parents=True)
+def unfinished_build(name):
+    """Most recent build of `name` that checkpointed blobs but never produced kb.json."""
+    root = BUILD_ROOT / name
+    if not root.is_dir():
+        return None
+    candidates = [path for path in root.iterdir()
+                  if (path / name / "state.json").is_file() and not (path / name / "kb.json").exists()]
+    if not candidates:
+        return None
+    build_root = max(candidates, key=lambda path: (path / name / "state.json").stat().st_mtime)
+    state = json.loads((build_root / name / "state.json").read_text())
+    return {"root": build_root, "commit": state.get("commit"), "blobs": len(state.get("blobs", []))}
+
+
+def rebuild(name, info, commit, config, previous=None, knowledge=None, *, build_root=None, workers=None):
+    if build_root is None:
+        build_root = BUILD_ROOT / name / uuid.uuid4().hex
+        build_root.mkdir(parents=True)
     env = dict(os.environ, KB_REPOMAP_HOME=str(build_root))
     from kb_incremental import reuse_input
     reusable = reuse_input(previous, name, build_root)
@@ -79,6 +94,8 @@ def rebuild(name, info, commit, config, previous=None, knowledge=None):
         knowledge_file.write_text(knowledge, encoding="utf-8")
         knowledge_file.chmod(0o600)
         window_args += ["--windows-knowledge", str(knowledge_file)]
+    if workers:
+        window_args += ["--workers", str(workers)]
     command = [sys.executable, str(ROOT / "kb_repo_url.py"), info["repository_url"],
                *config.get("build_args", []), *window_args, "--name", name, "--ref", commit,
                "--workspace", str(build_root / "repos"), "--no-mint"]
@@ -248,7 +265,18 @@ def window_knowledge(config, name, store_name, filename, previous=None):
 
 
 def create_kb(name, loaded, commit, config, filename="latest.json", *, previous=None, clean=False,
-              tree_files=False, repartition=False):
+              tree_files=False, repartition=False, resume=False, workers=None):
+    build_options = {}
+    if resume:
+        unfinished = unfinished_build(name)
+        if unfinished is None or not unfinished["commit"]:
+            raise ValueError(f"再開できる途中のビルドがありません: {name}")
+        commit = unfinished["commit"]
+        build_options["build_root"] = unfinished["root"]
+        print(f"--resume: 途中のビルドを再開します（{unfinished['blobs']} blob作成済み、commit固定）: "
+              f"{unfinished['root']}", flush=True)
+    if workers:
+        build_options["workers"] = workers
     print(f"KBを作成します: {name}@{commit} / store: {loaded['store']['name']}", flush=True)
     base_info = dict(loaded["info"])
     if repartition and base_info.pop("windows", None) is not None:
@@ -262,7 +290,7 @@ def create_kb(name, loaded, commit, config, filename="latest.json", *, previous=
     if not base_info.get("windows"):
         knowledge = window_knowledge(config, name, loaded["store"]["name"], filename, previous)
     jsonl = rebuild(name, base_info, commit, config, previous,
-                    **({"knowledge": knowledge} if knowledge else {}))
+                    **({"knowledge": knowledge} if knowledge else {}), **build_options)
     info = {**base_info, "source_commit": commit}
     from kb_incremental import manifest_from_state
     state_file = jsonl.parent / "state.json"
@@ -463,6 +491,9 @@ def main(argv=None):
     creation.add_argument("--clean", action="store_true", help="前回blobを再利用せず全体を作り直す")
     creation.add_argument("--windows", metavar="FILE",
                           help="ドメイン窓 [{name, rationale, files}] のJSONを指定して保存（config.windows.mode=domain）")
+    creation.add_argument("--resume", action="store_true",
+                          help="途中で止まった最新のビルドを、同じcommitのまま続きから再開する")
+    creation.add_argument("--workers", type=int, help="この作成だけ並列compact数を上書きする")
     creation.add_argument("--repartition", action="store_true",
                           help="保存済みのドメイン窓を捨て、モデルに設計し直させる（config.windows.mode=domain）")
     exclusion = creation.add_mutually_exclusive_group()
@@ -559,7 +590,7 @@ def main(argv=None):
         previous = None if args.clean else previous_kb(config, args.name, args.store, args.file)
         create_kb(args.name, loaded, store.source_head(loaded["info"]), config, args.file,
                   previous=previous, clean=args.clean, tree_files=args.tree_files,
-                  repartition=args.repartition)
+                  repartition=args.repartition, resume=args.resume, workers=args.workers)
         decrypt_after_publish(args.name, loaded["store"]["name"], args.file, config,
                               enabled=not args.no_decrypt)
     elif args.command == "dev-init":

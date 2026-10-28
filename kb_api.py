@@ -19,6 +19,8 @@ def context_scale(model):
     return CONTEXT_SCALE.get(model, 1)
 DEFAULT_COMPACT_WORKERS = 12
 COMPACT_MAX_ATTEMPTS = 6
+COMPACT_OVERLOAD_BASE_DELAY = 30
+COMPACT_OVERLOAD_MAX_DELAY = 600
 COMPACT_RETRY_MAX_DELAY = 30
 COMPACT_RETRYABLE_HTTP_CODES = {408, 409, 429, 500, 502, 503, 504}
 STATE_ROOT = os.path.expanduser(os.environ.get("KB_REPOMAP_HOME", "~/.kb-repomap"))
@@ -260,6 +262,10 @@ def compact_retry_delay(attempt, error):
             return min(COMPACT_RETRY_MAX_DELAY, max(0, float(retry_after)))
         except ValueError:
             pass
+    if isinstance(error, CompactionUpstreamError) and "overload" in str(error):
+        # Capacity errors last minutes, not seconds: back off much longer before re-sending a large pack.
+        base = min(COMPACT_OVERLOAD_MAX_DELAY, COMPACT_OVERLOAD_BASE_DELAY * 2 ** attempt)
+        return min(COMPACT_OVERLOAD_MAX_DELAY, base + random.random() * base / 4)
     base = min(COMPACT_RETRY_MAX_DELAY, 2 ** attempt)
     return min(COMPACT_RETRY_MAX_DELAY, base + random.random() * base)
 

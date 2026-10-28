@@ -282,5 +282,55 @@ class WindowCliTest(unittest.TestCase):
                 kb_cli.main(["create", "fixture", "--windows", str(bad)])
 
 
+class ResumeTest(unittest.TestCase):
+    def test_unfinished_build_picks_latest_checkpoint_without_kb_json(self):
+        with tempfile.TemporaryDirectory() as temp:
+            builds = Path(temp)
+            def make(label, commit, finished, mtime):
+                state = builds / "fixture" / label / "fixture" / "state.json"
+                state.parent.mkdir(parents=True)
+                state.write_text(json.dumps({"commit": commit, "blobs": [{"id": "x"}]}))
+                if finished:
+                    (state.parent / "kb.json").write_text("[]")
+                import os
+                os.utime(state, (mtime, mtime))
+            make("old", "a" * 40, False, 100)
+            make("done", "b" * 40, True, 300)
+            make("new", "c" * 40, False, 200)
+            with mock.patch.object(kb_cli, "BUILD_ROOT", builds):
+                found = kb_cli.unfinished_build("fixture")
+                self.assertEqual(found["root"].name, "new")
+                self.assertEqual(found["commit"], "c" * 40)
+                self.assertIsNone(kb_cli.unfinished_build("other"))
+
+    def test_resume_reuses_build_root_and_commit_and_workers_override(self):
+        with tempfile.TemporaryDirectory() as temp:
+            builds = Path(temp) / "builds"
+            partial = builds / "fixture" / "partial"
+            (partial / "fixture").mkdir(parents=True)
+            (partial / "fixture" / "state.json").write_text(json.dumps({"commit": "f" * 40, "blobs": []}))
+            commands = []
+            def run(command, *, env, check):
+                commands.append((command, env))
+                (Path(env["KB_REPOMAP_HOME"]) / "fixture" / "state.json").write_text(json.dumps(
+                    {"commit": "f" * 40, "blobs": [{"type": "compaction", "id": "x", "encrypted_content": "o"}]}))
+            published = {}
+            loaded = {"store": {"name": "s"}, "info": {"repository_url": "local",
+                                                     "windows": [{"name": "w", "files": ["a.ts"]}]}}
+            with mock.patch.object(kb_cli, "BUILD_ROOT", builds), \
+                    mock.patch.object(kb_cli.subprocess, "run", side_effect=run), \
+                    mock.patch.object(kb_cli.store, "publish", side_effect=lambda *a, **k: published.update(a[2]) or "r"), \
+                    mock.patch.object(kb_cli, "default_developer_text", return_value=""):
+                kb_cli.create_kb("fixture", loaded, "0" * 40, {"build_args": ["--workers", "12"]},
+                                 resume=True, workers=3)
+            command, env = commands[0]
+            self.assertEqual(env["KB_REPOMAP_HOME"], str(partial))
+            self.assertEqual(command[command.index("--ref") + 1], "f" * 40)
+            self.assertEqual(command[len(command) - 1 - command[::-1].index("--workers") + 1], "3")
+            self.assertEqual(published["source_commit"], "f" * 40)
+            with mock.patch.object(kb_cli, "BUILD_ROOT", Path(temp) / "empty"), self.assertRaises(ValueError):
+                kb_cli.create_kb("fixture", loaded, "0" * 40, {}, resume=True)
+
+
 if __name__ == "__main__":
     unittest.main()

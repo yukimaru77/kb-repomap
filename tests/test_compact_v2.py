@@ -176,7 +176,7 @@ class CompactV2Test(unittest.TestCase):
         self.assertTrue(all(response.closed for response in responses))
 
     def test_upstream_error_events_are_retried(self):
-        for first in (sse({"type": "error", "error": {"message": "overloaded"}}), sse({"type": "response.failed"})):
+        for first in (sse({"type": "error", "error": {"message": "boom"}}), sse({"type": "response.failed"})):
             with self.subTest(wire=first.getvalue()), \
                  mock.patch.object(kb_api, "http", side_effect=[first, success()]) as request, \
                  mock.patch.object(kb_api.random, "random", return_value=0), \
@@ -187,6 +187,15 @@ class CompactV2Test(unittest.TestCase):
             sleep.assert_called_once_with(1)
             self.assertEqual([blob["id"] for blob in output], ["blob"])
             self.assertIn("retry pack-01: upstream returned", log.getvalue())
+
+    def test_overloaded_upstream_backs_off_for_minutes(self):
+        overloaded = kb_api.CompactionUpstreamError("upstream returned error: {'code': 'server_is_overloaded'}")
+        with mock.patch.object(kb_api.random, "random", return_value=0):
+            delays = [kb_api.compact_retry_delay(attempt, overloaded) for attempt in range(5)]
+            ordinary = kb_api.compact_retry_delay(0, kb_api.CompactionUpstreamError("upstream returned error"))
+        self.assertEqual(delays, [30, 60, 120, 240, 480])
+        self.assertEqual(ordinary, 1)
+        self.assertEqual(kb_api.compact_retry_delay(9, overloaded), kb_api.COMPACT_OVERLOAD_MAX_DELAY)
 
     def test_upstream_error_events_stop_at_retry_limit(self):
         responses = [sse({"type": "error"}) for _ in range(kb_api.COMPACT_MAX_ATTEMPTS)]
