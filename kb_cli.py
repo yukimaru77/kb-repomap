@@ -86,7 +86,14 @@ def rebuild(name, info, commit, config, previous=None, knowledge=None, *, build_
     # Domain windows (config.windows.mode=domain): the stored layout is reused; without one the
     # build designs it, using the previous KB text as knowledge when available.
     windows_file = build_root / "windows.json"
-    if info.get("windows"):
+    resumed_state = build_root / name / "state.json"
+    resumed_windows = (json.loads(resumed_state.read_text()).get("windows")
+                       if resumed_state.is_file() else None)
+    if resumed_windows:
+        # Resuming: keep exactly the layout the checkpointed blobs were compacted with, so new-file
+        # placement cannot move files between finished windows.
+        windows_file.write_text(json.dumps(resumed_windows, ensure_ascii=False))
+    elif info.get("windows"):
         windows_file.write_text(json.dumps(info["windows"], ensure_ascii=False))
     window_args = ["--windows", str(windows_file)]
     if knowledge and not info.get("windows"):

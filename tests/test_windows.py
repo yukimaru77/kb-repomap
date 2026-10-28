@@ -163,6 +163,22 @@ class WindowBuildTest(unittest.TestCase):
         self.assertEqual(second["reused_packs"], 1)
         self.assertIn("ui/keys/detail.tsx", second["windows"][1]["files"])
 
+    def test_rebuild_in_same_state_drops_packs_whose_files_moved(self):
+        state_root = self.root / "same"
+        self.build(state_root)
+        self.assertEqual(len(self.calls), 2)
+        self.windows.write_text(json.dumps([
+            {"name": "billing", "rationale": "charge flow", "files": ["ui/billing/page.tsx", "api/billing.ts"]},
+            {"name": "keys", "rationale": "key flow", "files": ["api/keys.ts"]},
+            {"name": "key ui", "rationale": "key screens", "files": ["ui/keys/page.tsx"]},
+        ]))
+        state = self.build(state_root)
+        self.assertEqual(len(self.calls), 4)  # keys and key ui recompacted; billing kept
+        self.assertEqual([round_["source"] for round_ in sorted(state["rounds"], key=lambda r: r["plan_order"])],
+                         ["pack-01:billing", "pack-02:keys", "pack-03:key ui"])
+        self.assertEqual(len(state["blobs"]), 3)
+        self.assertEqual(len(state["fed"]), 3)
+
     def test_missing_windows_are_designed_once_and_written(self):
         self.windows.unlink()
         designed = [{"name": "all", "rationale": "everything",
@@ -325,11 +341,32 @@ class ResumeTest(unittest.TestCase):
                                  resume=True, workers=3)
             command, env = commands[0]
             self.assertEqual(env["KB_REPOMAP_HOME"], str(partial))
+            self.assertEqual(json.loads((partial / "windows.json").read_text()), [{"name": "w", "files": ["a.ts"]}])
             self.assertEqual(command[command.index("--ref") + 1], "f" * 40)
             self.assertEqual(command[len(command) - 1 - command[::-1].index("--workers") + 1], "3")
             self.assertEqual(published["source_commit"], "f" * 40)
             with mock.patch.object(kb_cli, "BUILD_ROOT", Path(temp) / "empty"), self.assertRaises(ValueError):
                 kb_cli.create_kb("fixture", loaded, "0" * 40, {}, resume=True)
+
+    def test_resume_prefers_checkpointed_layout_over_stored_windows(self):
+        with tempfile.TemporaryDirectory() as temp:
+            builds = Path(temp) / "builds"
+            partial = builds / "fixture" / "partial"
+            (partial / "fixture").mkdir(parents=True)
+            layout = [{"name": "w", "rationale": "", "files": ["a.ts", "new.ts"]}]
+            (partial / "fixture" / "state.json").write_text(json.dumps({"commit": "f" * 40, "blobs": [],
+                                                                         "windows": layout}))
+            seen = []
+            def run(command, *, env, check):
+                seen.append(json.loads(Path(command[command.index("--windows") + 1]).read_text()))
+                (Path(env["KB_REPOMAP_HOME"]) / "fixture" / "state.json").write_text(json.dumps(
+                    {"commit": "f" * 40, "windows": layout,
+                     "blobs": [{"type": "compaction", "id": "x", "encrypted_content": "o"}]}))
+            with mock.patch.object(kb_cli, "BUILD_ROOT", builds), \
+                    mock.patch.object(kb_cli.subprocess, "run", side_effect=run):
+                kb_cli.rebuild("fixture", {"repository_url": "local", "windows": [{"name": "w", "files": ["a.ts"]}]},
+                               "f" * 40, {"build_args": []}, build_root=partial)
+            self.assertEqual(seen[0], layout)
 
 
 if __name__ == "__main__":

@@ -677,6 +677,18 @@ def main():
             else:
                 pending.append((pack_id, label, paths, source, estimated, False))
 
+    # A resumed build may hold blobs of packs that are no longer planned (their files moved);
+    # they cannot be placed in the new order, so drop them before compacting anything.
+    planned = set(planned_pack_ids)
+    stale = {pack_id for pack_id in state["fed"] if pack_id not in planned}
+    if stale and not args.dry_run:
+        pack_of = state.get("blob_pack_ids", {})
+        state["blobs"] = [blob for blob in state["blobs"] if pack_of.get(blob.get("id")) not in stale]
+        state["rounds"] = [round_ for round_ in state["rounds"] if round_.get("source_id") not in stale]
+        state["fed"] = [pack_id for pack_id in state["fed"] if pack_id not in stale]
+        fed -= stale
+        print(f"dropped {len(stale)} checkpointed pack(s) no longer in the plan", file=sys.stderr, flush=True)
+        save_repo_state(args.name, state)
     if reused:
         order = {pack_id: index for index, pack_id in enumerate(planned_pack_ids)}
         state["blobs"].sort(key=lambda blob: order[state["blob_pack_ids"][blob["id"]]])
