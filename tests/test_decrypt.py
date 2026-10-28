@@ -244,7 +244,7 @@ class ScheduleTest(unittest.TestCase):
             return attempt_record(blob["id"], model, effort, repeat, 4)
 
         kb_decrypt.run_schedule(self.jobs(("only",)), runner)
-        groups = [sorted(calls[index:index + 2]) for index in range(0, 8, 2)]
+        groups = [sorted(calls[index:index + 2]) for index in range(0, len(kb_decrypt.ATTEMPTS), 2)]
         self.assertEqual(groups, [sorted(wave) for wave in kb_decrypt.WAVES])
 
     def test_first_wave_runs_two_requests_for_every_blob_together(self):

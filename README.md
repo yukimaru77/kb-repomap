@@ -88,12 +88,13 @@ kb octane --remote --rebuild always --clean codex
 作成には下記の `build_args` または `KB_RR_*` による圧縮用RRエンドポイントの設定が必要です。
 `kb list` では未作成KBを「未作成」と表示します。作成後は同じ名前で `kb codex xx` を使えます。
 
-保存済みblobの平文は `kb decrypt xx` で復元します。blob が N 個なら、各波は high と max を同時に N 本ずつ、合計 2N 並列です。順番は次の4波で、最大8回です。
+保存済みblobの平文は `kb decrypt xx` で復元します。blob が N 個なら、各波は high と max を同時に N 本ずつ、合計 2N 並列です。順番は次の5波で、最大10回です。
 
 1. `gpt-6-luna` high と max
 2. `gpt-6-luna` high と max の2回目
 3. `gpt-5.6-luna` high と max
 4. `gpt-5.6-luna` high と max の2回目
+5. `gpt-6.1-terra` high と max（lunaで範囲内が出なかったblobだけ）
 
 blobのトークン数から±2%以内のテキストが出たblobは、その波で打ち切ります。範囲内が複数なら、いちばん近いトークン数を採用します。最後まで範囲内がなければ、最も近いトークン数を採用します。出力したテキスト、採用した `raw.txt`、選定理由を `<KB名>/decrypt/<ファイル名>/` にcommit/pushします。完了済みの呼び出しは再実行しません。
 

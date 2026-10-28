@@ -26,6 +26,8 @@ WAVES = (
     (("gpt-6-luna", "high", 2), ("gpt-6-luna", "max", 2)),
     (("gpt-5.6-luna", "high", 1), ("gpt-5.6-luna", "max", 1)),
     (("gpt-5.6-luna", "high", 2), ("gpt-5.6-luna", "max", 2)),
+    # Last resort when no luna text matches the blob size; gpt-6.1-terra also decrypts blobs.
+    (("gpt-6.1-terra", "high", 1), ("gpt-6.1-terra", "max", 1)),
 )
 ATTEMPTS = tuple(attempt for wave in WAVES for attempt in wave)
 PROMPT = (
@@ -260,7 +262,7 @@ def write_selection(blob, directory, records):
 
 
 def run_schedule(jobs, runner):
-    """Run the four waves. `jobs` keep `blob`, `directory`, and `records`."""
+    """Run the waves in order. `jobs` keep `blob`, `directory`, and `records`."""
     pending = [job for job in jobs if not job.get("selection")]
     for index, wave in enumerate(WAVES, start=1):
         pending = [job for job in pending if not within_cutoff(job["blob"], job["records"])]
