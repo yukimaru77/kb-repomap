@@ -171,11 +171,18 @@ class CompactionStreamInterrupted(ValueError):
     """The stream closed without a terminal response.completed event."""
 
 
+class CompactionUpstreamError(ValueError):
+    """The upstream emitted an error/response.failed event; observed to be transient for large packs."""
+
+
 def compaction_result(source):
     items = []
     for event in events(source):
         kind = event.get("type")
-        if kind in {"error", "response.failed", "response.incomplete"}:
+        if kind in {"error", "response.failed"}:
+            detail = event.get("error") or (event.get("response") or {}).get("error") or event.get("message")
+            raise CompactionUpstreamError(f"upstream returned {kind}" + (f": {detail}" if detail else ""))
+        if kind == "response.incomplete":
             raise ValueError(f"upstream returned {kind}")
         if kind == "response.output_item.done":
             item = event.get("item") or {}
@@ -298,6 +305,7 @@ def compact(items, model=DEFAULT_MODEL, effort=DEFAULT_EFFORT,
             ConnectionError,
             IncompleteRead,
             CompactionStreamInterrupted,
+            CompactionUpstreamError,
             json.JSONDecodeError,
             ssl.SSLError,
         ) as error:

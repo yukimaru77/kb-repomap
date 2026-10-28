@@ -175,9 +175,30 @@ class CompactV2Test(unittest.TestCase):
         self.assertEqual(sleep.call_count, kb_api.COMPACT_MAX_ATTEMPTS - 1)
         self.assertTrue(all(response.closed for response in responses))
 
+    def test_upstream_error_events_are_retried(self):
+        for first in (sse({"type": "error", "error": {"message": "overloaded"}}), sse({"type": "response.failed"})):
+            with self.subTest(wire=first.getvalue()), \
+                 mock.patch.object(kb_api, "http", side_effect=[first, success()]) as request, \
+                 mock.patch.object(kb_api.random, "random", return_value=0), \
+                 mock.patch.object(kb_api.time, "sleep") as sleep, \
+                 mock.patch("sys.stderr", new_callable=io.StringIO) as log:
+                output, _, _ = kb_api.compact([kb_api.u("source")], retry_label="pack-01")
+            self.assertEqual(request.call_count, 2)
+            sleep.assert_called_once_with(1)
+            self.assertEqual([blob["id"] for blob in output], ["blob"])
+            self.assertIn("retry pack-01: upstream returned", log.getvalue())
+
+    def test_upstream_error_events_stop_at_retry_limit(self):
+        responses = [sse({"type": "error"}) for _ in range(kb_api.COMPACT_MAX_ATTEMPTS)]
+        with mock.patch.object(kb_api, "http", side_effect=responses) as request, \
+             mock.patch.object(kb_api.time, "sleep"), \
+             mock.patch("sys.stderr", new_callable=io.StringIO):
+            with self.assertRaisesRegex(kb_api.CompactionUpstreamError, "upstream returned error"):
+                kb_api.compact([])
+        self.assertEqual(request.call_count, kb_api.COMPACT_MAX_ATTEMPTS)
+
     def test_terminal_failure_and_invalid_completed_result_are_not_retried(self):
         for response in (
-            sse({"type": "error"}), sse({"type": "response.failed"}),
             sse({"type": "response.incomplete"}), sse({"type": "response.completed"}),
         ):
             with self.subTest(wire=response.getvalue()), \
