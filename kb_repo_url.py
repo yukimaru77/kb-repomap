@@ -152,6 +152,9 @@ def load_config(path):
     two_stage = data.get("two_stage") or {}
     if not isinstance(two_stage, dict):
         raise SystemExit("config.two_stage must be a mapping")
+    windows = data.get("windows") or {}
+    if not isinstance(windows, dict):
+        raise SystemExit("config.windows must be a mapping")
     config = {
         "chunk_tokens": data.get("chunk_tokens", 150_000),
         "two_stage_enabled": two_stage.get("enabled", False),
@@ -166,8 +169,15 @@ def load_config(path):
         "max_file_bytes": data.get("max_file_bytes", 600_000),
         "thin_blob_threshold": data.get("thin_blob_threshold", 2_000),
         "map_tokens": data.get("map_tokens", 10_000),
+        "windows_mode": windows.get("mode", "directory"),
+        "windows_count": windows.get("count", 11),
+        "windows_max_tokens": windows.get("max_tokens", 400_000),
+        "windows_reading_instructions": windows.get("reading_instructions", "domain-reading-instructions.txt"),
     }
-    for key in ("chunk_tokens", "second_stage_budget_tokens", "second_stage_count", "workers", "max_file_bytes", "map_tokens"):
+    if config["windows_mode"] not in {"directory", "domain"}:
+        raise SystemExit("config.windows.mode must be directory or domain")
+    for key in ("chunk_tokens", "second_stage_budget_tokens", "second_stage_count", "workers", "max_file_bytes", "map_tokens",
+                "windows_count", "windows_max_tokens"):
         if not isinstance(config[key], int) or config[key] <= 0:
             raise SystemExit(f"config.{key} must be a positive integer")
     if not isinstance(config["thin_blob_threshold"], int) or config["thin_blob_threshold"] < 0:
@@ -215,6 +225,9 @@ def main():
     parser.add_argument("--budget-tokens", type=int, help="override config chunk_tokens")
     parser.add_argument("--workers", type=int, help="override config workers")
     parser.add_argument("--max-file-bytes", type=int, help="override config max_file_bytes")
+    parser.add_argument("--windows", help="domain windows JSON (read if present, written after design)")
+    parser.add_argument("--windows-knowledge", help="UTF-8 repository knowledge for the window designer")
+    parser.add_argument("--directory-packs", action="store_true", help="ignore config.windows and pack by directory")
     parser.add_argument("--exclude", action="append", default=[],
                         help="drop matching source paths before packing (prefix or glob); repeatable")
     two_stage = parser.add_mutually_exclusive_group()
@@ -310,7 +323,17 @@ def main():
         command += ["--exclude", pattern]
     if args.reuse_manifest:
         command += ["--reuse-manifest", str(Path(args.reuse_manifest).expanduser().resolve())]
-    for option, value in (("--reading-instructions-file", args.reading_instructions_file),
+    reading_file = args.reading_instructions_file
+    if config["windows_mode"] == "domain" and not args.directory_packs:
+        windows_file = Path(args.windows).expanduser().resolve() if args.windows else (
+            Path(kb_api.STATE_ROOT) / name / "windows.json")
+        command += ["--windows", str(windows_file), "--design-windows", str(config["windows_count"]),
+                    "--windows-cap", str(config["windows_max_tokens"])]
+        if args.windows_knowledge:
+            command += ["--windows-knowledge", str(Path(args.windows_knowledge).expanduser().resolve())]
+        if reading_file is None:
+            reading_file = str(DEFAULT_CONFIG.with_name(config["windows_reading_instructions"]))
+    for option, value in (("--reading-instructions-file", reading_file),
                           ("--instructions-file", args.instructions_file)):
         if value is not None:
             command += [option, str(Path(value).expanduser().resolve())]

@@ -763,6 +763,26 @@ Codex側の設定・ログイン・環境変数を変更する処理はありま
 5. `kb create` はblob列＋KB用のuser指示をJSON配列として保存する。
    単体ビルダーの従来のセッション鋳造は別機能で、下記を参照。
 
+### ドメイン窓（既定: `windows.mode: domain`）
+
+ディレクトリ単位のパックでは、画面・BFF・Gateway・DB・テストが別々のblobに分かれ、
+層をまたぐつながりが残りません。既定ではパックを**ドメイン窓**にします。
+
+1. 初回はモデル（`model`/`effort`）が全ファイル一覧を見て、約 `windows.count` 個の窓を設計する。
+   1窓は1つの業務・技術ドメインを全層で含む縦切り（例: 決済＝Billing画面・BFF・決済処理・
+   migration・テスト・runbook）で、`windows.max_tokens` 以下。判断材料には前回KBの復号済み本文を使い、
+   無ければファイルごとのexport・テスト名・SQL・見出しを機械抽出した索引を使う。
+   結果は漏れ・重複・上限超過を補正してから使う。全体が1窓に収まる小さいリポジトリでは設計を呼ばない。
+   設計が失敗した場合は警告してディレクトリ単位に戻る。
+2. 各窓を1パックとして圧縮する。窓にはmapを付けず、`domain-reading-instructions.txt`
+   （窓の名前・狙いを差し込み、層横断のつながり・食い違いを高密度表記で保持させる指示）を付ける。
+3. 窓の割り当ては保存先のKB情報（`windows`）に保存され、次回以降の再作成で再利用される。
+   変更ファイルを含む窓だけを圧縮し直し、新規ファイルは同じディレクトリのファイルが最も多い窓へ入る。
+   `--clean` でも割り当ては維持する。`kb create NAME --repartition` で設計し直し、
+   `kb create NAME --windows layout.json` で割り当て `[{"name","rationale","files"}]` を指定できる。
+
+従来のディレクトリ単位に戻すには `config.yaml` で `windows.mode: directory` にします。
+
 `compaction`、`compaction_summary`、暗号化内容を持つ `context_compaction` を扱います。
 blobの未知のフィールドも保存・再送し、セッション出力でも型名や内容を再構成しません。
 旧 `/responses/compact` やテキスト要約へのfallbackはありません。
@@ -786,7 +806,8 @@ mapは構造・識別子の抜粋で、従来のLLMによる業務・設計解�
 - `--prelude-file metadata.md`: 追加資料を別blobとして先頭へ置く。二段階圧縮の対象外。
 
 [config.yaml](config.yaml) の既定値は `gpt-6.1-sol / xhigh`、最大12並列、map予算10K、
-一次パック予算150K、**二次圧縮なし**です。
+**ドメイン窓（約11窓・1窓400K以下）**、**二次圧縮なし**です。ディレクトリ単位（`windows.mode: directory`）の
+一次パック予算は150Kです。
 `gpt-6.1-sol` はコンテキスト長が2倍(500K)なので、このモデルのときは config/既定値由来の
 token予算(`chunk_tokens`・`map_tokens`・`two_stage.token_budget`・`merge-old`/`build` の既定値)を
 自動で2倍にします(`kb_api.CONTEXT_SCALE`)。CLIで明示した値はそのまま使います。

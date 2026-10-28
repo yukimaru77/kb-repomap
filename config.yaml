@@ -3,6 +3,16 @@
 chunk_tokens: 150000
 map_tokens: 10000
 
+# Pack layout. directory: pack files by directory (legacy). domain: the model designs about
+# `count` cross-layer DOMAIN windows (UI+BFF+Gateway+DB+tests+docs of one feature) of at most
+# `max_tokens` source tokens; the layout is stored with the KB and reused by later rebuilds.
+# Each window is compacted with `reading_instructions` ({NAME}/{RATIONALE} are filled in).
+windows:
+  mode: domain
+  count: 11
+  max_tokens: 400000
+  reading_instructions: domain-reading-instructions.txt
+
 # Second-stage compaction is opt-in: group by blob count or measured output tokens.
 two_stage:
   enabled: false

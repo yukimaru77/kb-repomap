@@ -58,7 +58,7 @@ def export_kb(args, config):
     print(json.dumps(result, ensure_ascii=False))
 
 
-def rebuild(name, info, commit, config, previous=None):
+def rebuild(name, info, commit, config, previous=None, knowledge=None):
     build_root = BUILD_ROOT / name / uuid.uuid4().hex
     build_root.mkdir(parents=True)
     env = dict(os.environ, KB_REPOMAP_HOME=str(build_root))
@@ -68,8 +68,19 @@ def rebuild(name, info, commit, config, previous=None):
     if reusable:
         reuse_file.write_text(json.dumps(reusable, ensure_ascii=False))
         reuse_file.chmod(0o600)
+    # Domain windows (config.windows.mode=domain): the stored layout is reused; without one the
+    # build designs it, using the previous KB text as knowledge when available.
+    windows_file = build_root / "windows.json"
+    if info.get("windows"):
+        windows_file.write_text(json.dumps(info["windows"], ensure_ascii=False))
+    window_args = ["--windows", str(windows_file)]
+    if knowledge and not info.get("windows"):
+        knowledge_file = build_root / "windows-knowledge.txt"
+        knowledge_file.write_text(knowledge, encoding="utf-8")
+        knowledge_file.chmod(0o600)
+        window_args += ["--windows-knowledge", str(knowledge_file)]
     command = [sys.executable, str(ROOT / "kb_repo_url.py"), info["repository_url"],
-               *config.get("build_args", []), "--name", name, "--ref", commit,
+               *config.get("build_args", []), *window_args, "--name", name, "--ref", commit,
                "--workspace", str(build_root / "repos"), "--no-mint"]
     if reusable:
         command += ["--reuse-manifest", str(reuse_file)]
@@ -84,7 +95,7 @@ def rebuild(name, info, commit, config, previous=None):
     print(f"blob再利用: {reused_count}/{total} / RRで圧縮: {total - reused_count}", flush=True)
     items = [item for item in state.get("blobs") or state.get("base_items", [])
              if item.get("type") in COMPACTION_TYPES]
-    if state.get("reused_packs"):
+    if state.get("reused_packs") and not state.get("windows"):
         current_map = Path(state["repo_map"]).read_text(encoding="utf-8")
         items.append({"type": "message", "role": "user", "content": [{"type": "input_text",
             "text": REPO_MAP_HEADER + current_map}]})
@@ -221,19 +232,44 @@ def decrypt_after_publish(name, store_name, filename, config, *, enabled=True):
               file=sys.stderr, flush=True)
 
 
+def window_knowledge(config, name, store_name, filename, previous=None):
+    """Previous KB plaintext for the domain-window designer, or None when unavailable."""
+    from kb_claude import build_context
+    candidates = [previous] if previous else []
+    if not candidates:
+        found = previous_kb(config, name, store_name, filename)
+        candidates = [found] if found else []
+    for loaded in candidates:
+        try:
+            return build_context(loaded, name, loaded["jsonl"].name)
+        except (ValueError, OSError, KeyError):
+            continue
+    return None
+
+
 def create_kb(name, loaded, commit, config, filename="latest.json", *, previous=None, clean=False,
-              tree_files=False):
+              tree_files=False, repartition=False):
     print(f"KBを作成します: {name}@{commit} / store: {loaded['store']['name']}", flush=True)
+    base_info = dict(loaded["info"])
+    if repartition and base_info.pop("windows", None) is not None:
+        print("--repartition: ドメイン窓を設計し直します。", flush=True)
     if clean:
         print("--clean: 前回blobを再利用せず全体を作り直します。", flush=True)
         previous = None
     elif previous is None and loaded.get("jsonl"):
         previous = loaded
-    jsonl = rebuild(name, loaded["info"], commit, config, previous)
-    info = {**loaded["info"], "source_commit": commit}
+    knowledge = None
+    if not base_info.get("windows"):
+        knowledge = window_knowledge(config, name, loaded["store"]["name"], filename, previous)
+    jsonl = rebuild(name, base_info, commit, config, previous,
+                    **({"knowledge": knowledge} if knowledge else {}))
+    info = {**base_info, "source_commit": commit}
     from kb_incremental import manifest_from_state
     state_file = jsonl.parent / "state.json"
-    manifest = manifest_from_state(json.loads(state_file.read_text())) if state_file.exists() else None
+    state = json.loads(state_file.read_text()) if state_file.exists() else {}
+    if state.get("windows"):
+        info["windows"] = state["windows"]
+    manifest = manifest_from_state(state) if state else None
     if manifest:
         info["pack_manifest"] = manifest
     else:
@@ -425,6 +461,10 @@ def main(argv=None):
     creation.add_argument("name", type=store.name_value)
     creation.add_argument("--store")
     creation.add_argument("--clean", action="store_true", help="前回blobを再利用せず全体を作り直す")
+    creation.add_argument("--windows", metavar="FILE",
+                          help="ドメイン窓 [{name, rationale, files}] のJSONを指定して保存（config.windows.mode=domain）")
+    creation.add_argument("--repartition", action="store_true",
+                          help="保存済みのドメイン窓を捨て、モデルに設計し直させる（config.windows.mode=domain）")
     exclusion = creation.add_mutually_exclusive_group()
     exclusion.add_argument("--exclude", action="append", metavar="PATTERN",
                            help="KBに入れないパス（先頭一致、または * を含むglob）。指定すると保存済みの一覧を置き換える")
@@ -509,9 +549,17 @@ def main(argv=None):
             loaded["info"].pop("exclude", None)
         if loaded["info"].get("exclude"):
             print("除外: " + ", ".join(loaded["info"]["exclude"]), flush=True)
+        if args.windows:
+            windows = json.loads(Path(args.windows).expanduser().read_text(encoding="utf-8"))
+            if not isinstance(windows, list) or not all(isinstance(w, dict) and isinstance(w.get("files"), list)
+                                                        for w in windows):
+                raise ValueError("--windows はドメイン窓 [{name, rationale, files}] のJSON配列です")
+            loaded["info"]["windows"] = windows
+            print(f"ドメイン窓を指定: {len(windows)}窓", flush=True)
         previous = None if args.clean else previous_kb(config, args.name, args.store, args.file)
         create_kb(args.name, loaded, store.source_head(loaded["info"]), config, args.file,
-                  previous=previous, clean=args.clean, tree_files=args.tree_files)
+                  previous=previous, clean=args.clean, tree_files=args.tree_files,
+                  repartition=args.repartition)
         decrypt_after_publish(args.name, loaded["store"]["name"], args.file, config,
                               enabled=not args.no_decrypt)
     elif args.command == "dev-init":

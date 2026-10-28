@@ -409,6 +409,61 @@ def compact_pending(
         raise RuntimeError(f"{len(failures)} pack(s) failed: {labels}") from failures[0][1]
 
 
+def window_reading(template, window):
+    """Per-window reading instructions; {NAME} and {RATIONALE} are filled in."""
+    return template.replace("{NAME}", window.get("name", "")).replace("{RATIONALE}", window.get("rationale", ""))
+
+
+def load_windows(args, included, block_tokens, contents):
+    """Domain windows for this build, or None for directory packing."""
+    if not args.windows and not args.design_windows:
+        return None
+    files = [path.as_posix() for path in included]
+    tokens = {path.as_posix(): block_tokens[path] for path in included}
+    path = Path(args.windows).expanduser() if args.windows else None
+    if path is not None and path.is_file():
+        windows = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(windows, list):
+            raise SystemExit(f"--windows must be a JSON list: {path}")
+        return windows
+    if not args.design_windows:
+        raise SystemExit(f"--windows not found: {path}")
+    if args.dry_run:
+        raise SystemExit("--design-windows calls the model; run without --dry-run first or pass --windows")
+    import kb_partition
+    if sum(tokens.values()) <= args.windows_cap:
+        # The whole repository fits one window; there is nothing to design.
+        windows = [{"name": "repository", "rationale": "the whole repository in one window", "files": files}]
+    else:
+        knowledge = (Path(args.windows_knowledge).expanduser().read_text(encoding="utf-8")
+                     if args.windows_knowledge else None)
+        print(f"designing about {args.design_windows} domain windows for {len(files)} files",
+              file=sys.stderr, flush=True)
+        try:
+            windows = kb_partition.design(
+                files, tokens, {path.as_posix(): contents[path] for path in included}, knowledge=knowledge,
+                count=args.design_windows, cap=args.windows_cap, model=args.model, effort=args.effort,
+            )
+        except RuntimeError as error:
+            print(f"warning: {error}; falling back to directory packs", file=sys.stderr, flush=True)
+            return None
+    if path is not None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(windows, ensure_ascii=False, indent=1), encoding="utf-8")
+    return windows
+
+
+def window_packs(windows, included, block_tokens, capacity):
+    """Current files laid out on the stored windows: new files join the closest window, and
+    windows over capacity are split in file order. Returns [{name, rationale, paths}]."""
+    import kb_partition
+    files = [path.as_posix() for path in included]
+    tokens = {path.as_posix(): block_tokens[path] for path in included}
+    fixed = kb_partition.repair(windows, files, tokens, capacity)
+    return [{"name": window["name"], "rationale": window.get("rationale", ""),
+             "paths": [PurePosixPath(path) for path in window["files"]]} for window in fixed]
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--repo", required=True)
@@ -433,6 +488,16 @@ def main():
     parser.add_argument("--limit", type=int, help="process at most N pending packs")
     parser.add_argument("--exclude", action="append", default=[],
                         help="drop matching paths (prefix, or fnmatch glob); repeatable")
+    parser.add_argument("--windows", help="JSON domain windows [{name, rationale, files}] used as packs; "
+                                          "designed and written here when missing and --design-windows is set")
+    parser.add_argument("--design-windows", type=int, metavar="N",
+                        help="ask the model for about N domain windows when --windows does not exist yet")
+    parser.add_argument("--windows-cap", type=int, default=400_000,
+                        help="target source tokens per designed domain window")
+    parser.add_argument("--windows-knowledge", help="UTF-8 text describing the repository (e.g. the previous KB) "
+                                                    "given to the window designer")
+    parser.add_argument("--window-max-tokens", type=int, default=470_000,
+                        help="hard input limit per domain window; larger windows are split")
     args = parser.parse_args()
     if args.budget_tokens is None:
         args.budget_tokens = 150_000 * kb_api.context_scale(args.model)
@@ -485,6 +550,10 @@ def main():
     if capacity <= 0:
         raise SystemExit(f"repo_map/instructions consume {prefix_tokens} tokens, exceeding budget")
     block_tokens = {p: kb_api.est_tokens(file_block(p.as_posix(), contents[p])) for p in included}
+    windows = load_windows(args, included, block_tokens, contents)
+    if windows is not None:
+        prefix_tokens = kb_api.est_tokens(blob_source("", [], {}, window_reading(reading_instructions, {})))
+        capacity = args.window_max_tokens - prefix_tokens - 2_000
     units = build_related_units(included, block_tokens, capacity)
     reusable = json.loads(Path(args.reuse_manifest).read_text()) if args.reuse_manifest else None
     old_packs = []
@@ -502,6 +571,17 @@ def main():
     reserved = set()
     packs = []
     reuse_by_files = {}
+    pack_names = {}
+    if windows is not None:
+        for window in window_packs(windows, included, block_tokens, capacity):
+            packs.append(window["paths"])
+            pack_names[tuple(window["paths"])] = window
+        old_by_files = {tuple(PurePosixPath(path) for path in old["files"]): old["blobs"] for old in old_packs}
+        for paths in packs:
+            if tuple(paths) in old_by_files and not any(path.as_posix() in changed for path in paths):
+                reuse_by_files[tuple(paths)] = old_by_files[tuple(paths)]
+        old_packs = []
+        reserved = set(included)
     for old in old_packs:
         old_paths = [PurePosixPath(path) for path in old["files"]]
         paths = [path for path in old_paths if path in included_set and path not in reserved]
@@ -515,7 +595,8 @@ def main():
         if paths == old_paths and not any(path.as_posix() in changed for path in paths):
             reuse_by_files[tuple(paths)] = old["blobs"]
     new_paths = [path for path in included if path not in reserved]
-    packs.extend(pack_units(build_related_units(new_paths, block_tokens, capacity), block_tokens, capacity))
+    if new_paths:
+        packs.extend(pack_units(build_related_units(new_paths, block_tokens, capacity), block_tokens, capacity))
 
     state = load_repo_state(args.name, repo)
     state["commit"] = git(repo, "rev-parse", "HEAD")
@@ -530,6 +611,10 @@ def main():
     state["reading_instructions"] = reading_instructions
     state["instructions"] = instructions
     state["skipped"] = skipped
+    if windows is not None:
+        state["windows"] = [{"name": pack_names[tuple(paths)]["name"],
+                             "rationale": pack_names[tuple(paths)]["rationale"],
+                             "files": [path.as_posix() for path in paths]} for paths in packs]
     fed = set(state["fed"])
     pending = []
     planned_pack_ids = []
@@ -562,10 +647,14 @@ def main():
         )
     state["prelude_files"] = [str(path) for path in prelude_files]
     for index, paths in enumerate(packs, 1):
-        source = blob_source(repo_map, paths, contents, reading_instructions)
+        window = pack_names.get(tuple(paths))
+        if window is not None:
+            source = blob_source("", paths, contents, window_reading(reading_instructions, window))
+        else:
+            source = blob_source(repo_map, paths, contents, window_reading(reading_instructions, {}))
         pack_id = digest(source.encode())
         planned_pack_ids.append(pack_id)
-        label = f"pack-{index:02d}:{common_directory(paths)}"
+        label = f"pack-{index:02d}:{window['name'] if window else common_directory(paths)}"
         estimated = kb_api.est_tokens(source)
         plan.append({"label": label, "files": len(paths), "estimated_tokens": estimated,
                      "first": paths[0].as_posix(), "last": paths[-1].as_posix(),
