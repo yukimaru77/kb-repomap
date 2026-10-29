@@ -314,6 +314,27 @@ def publish_plaintext(store_entry, name, files, replace=None):
         return store.git(repo, "rev-parse", "HEAD").stdout.strip()
 
 
+def write_knowledge(directories, workers=8):
+    """knowledge.txt: raw.txt without conversation/instruction meta lines (see kb_meta_strip).
+    raw.txt stays as decrypted; the report keeps the raw digest so unchanged blobs are not redone."""
+    import hashlib
+    import kb_meta_strip
+    def run(directory):
+        raw = (directory / "raw.txt").read_text(encoding="utf-8")
+        digest = hashlib.sha256(raw.encode()).hexdigest()
+        report_path = directory / "knowledge.json"
+        if report_path.is_file() and (directory / "knowledge.txt").is_file():
+            if json.loads(report_path.read_text(encoding="utf-8")).get("raw_sha256") == digest:
+                return directory.name, "cached"
+        clean, report = kb_meta_strip.strip_meta(raw)
+        write_private(directory / "knowledge.txt", clean)
+        write_json(report_path, {"raw_sha256": digest, **report})
+        return directory.name, f"{report['status']} -{report['removed_tokens']}tok"
+    with ThreadPoolExecutor(max_workers=max(1, workers)) as executor:
+        for name, result in executor.map(run, directories):
+            print(f"  知識のみ: {name}: {result}", flush=True)
+
+
 def decrypt(args, config):
     apply_rr(config, args)
     loaded = store.find_kb(config, args.name, args.store, filename=args.file)
@@ -344,6 +365,7 @@ def decrypt(args, config):
             jobs.append({"blob": blob, "directory": directory, "records": []})
     selections = [{"directory": job["directory"].name, **selection}
                   for job, selection in zip(jobs, run_schedule(jobs, run_attempt))]
+    write_knowledge([job["directory"] for job in jobs])
     manifest = {"kb": args.name, "file": args.file, "blobs": [
         {key: item[key] for key in ("directory", "blob_id", "blob_tokens", "selected", "selected_tokens", "reason")}
         for item in selections]}

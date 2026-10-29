@@ -41,12 +41,16 @@ def _decrypt_files(loaded, name, filename):
     repo, revision, _branch = store.sync_store(loaded["store"])
     prefix = f"{name}/decrypt/{Path(filename).stem}"
     listing = store.git(repo, "ls-tree", "-r", "--name-only", revision, prefix).stdout.splitlines()
+    present = set(listing)
     files = []
     for relative in listing:
         if not relative.endswith("/raw.txt"):
             continue
-        text = store.git(repo, "show", f"{revision}:{relative}").stdout
-        files.append((relative, text))
+        # Prefer the meta-stripped text (conversation/instruction lines removed) when published.
+        knowledge = relative[: -len("raw.txt")] + "knowledge.txt"
+        chosen = knowledge if knowledge in present else relative
+        text = store.git(repo, "show", f"{revision}:{chosen}").stdout
+        files.append((chosen, text))
     return files
 
 
