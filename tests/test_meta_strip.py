@@ -67,12 +67,16 @@ class KnowledgeFileTest(unittest.TestCase):
             calls = []
             def strip(text):
                 calls.append(text)
-                return text.split("\n", 2)[2], {"tokens": 1, "removed_tokens": 5, "deleted_lines": [1, 2],
-                                                 "status": "stripped"}
+                return text.split("\n", 2)[2], {"version": kb_meta_strip.VERSION, "tokens": 1, "removed_tokens": 5,
+                                                 "deleted_lines": [1, 2], "status": "stripped"}
             with mock.patch("kb_meta_strip.strip_meta", side_effect=strip):
                 kb_decrypt.write_knowledge([directory])
                 kb_decrypt.write_knowledge([directory])
             self.assertEqual(len(calls), 1)
+            with mock.patch("kb_meta_strip.strip_meta", side_effect=strip), \
+                    mock.patch.object(kb_meta_strip, "VERSION", kb_meta_strip.VERSION + 1):
+                kb_decrypt.write_knowledge([directory])
+            self.assertEqual(len(calls), 2)  # a new strip version recomputes
             self.assertNotIn("We must answer", (directory / "knowledge.txt").read_text())
             report = json.loads((directory / "knowledge.json").read_text())
             self.assertEqual(report["status"], "stripped")

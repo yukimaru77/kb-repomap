@@ -10,6 +10,8 @@ import sys
 
 import kb_api
 
+# Bump when the prompt or rules change so published knowledge.txt files are recomputed.
+VERSION = 2
 MIN_TOKENS = 2_000
 MAX_REMOVED_SHARE = 0.10
 INSTRUCTIONS = "You clean knowledge-base text. Output JSON only."
@@ -17,8 +19,10 @@ PROMPT = """Below is a knowledge-base text produced by compacting a conversation
 Some lines are not repository knowledge but describe the conversation itself: restated user/developer instructions, the requested output format or sections, token budgets, tool usage, the task status, plans, or suggestions for the next response.
 
 Return the line ranges that contain ONLY such conversation/meta content.
+Such text is usually at the START (the summarizer restating the request: "We need to answer the user...", "Developer: act as KB...", "User demands two sections...") and near the END (plans: "Need produce ~20k tokens", "Suggested final organization", "No answer yet"). Lines about the summarizer's own work (what it has read, will write, token budgets) are meta too.
 Rules:
-- Never include a line that states any repository fact (paths, identifiers, behavior, numbers, contracts, conflicts, legends/aliases used by the knowledge, etc.), even if the line also contains meta content.
+- Never include a line that states a SPECIFIC repository fact (a path, identifier, value, behavior, contract, conflict, or a legend/alias used by the knowledge), even if the line also contains meta content.
+- A general mention of what the input covered ("the blob contains UI, docs, migrations and tests", "huge Alibaba evidence corpus", "~110 files") is not a specific fact; a line made only of such mentions plus meta is meta.
 - Section headings that only wrap meta content (e.g. "## CONV") may be included; headings of knowledge sections may not.
 - When unsure, keep the line.
 
@@ -38,10 +42,10 @@ def _ranges(text, line_count):
     return lines
 
 
-def strip_meta(text, *, caller=None, model=kb_api.DEFAULT_MODEL, effort="medium"):
+def strip_meta(text, *, caller=None, model=kb_api.DEFAULT_MODEL, effort="high"):
     """Return (clean_text, report). On any doubt the original text is returned unchanged."""
     total = kb_api.est_tokens(text)
-    report = {"tokens": total, "removed_tokens": 0, "deleted_lines": [], "status": "kept"}
+    report = {"version": VERSION, "tokens": total, "removed_tokens": 0, "deleted_lines": [], "status": "kept"}
     if total < MIN_TOKENS:
         report["status"] = "short"
         return text, report

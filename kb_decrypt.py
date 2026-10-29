@@ -324,7 +324,8 @@ def write_knowledge(directories, workers=8):
         digest = hashlib.sha256(raw.encode()).hexdigest()
         report_path = directory / "knowledge.json"
         if report_path.is_file() and (directory / "knowledge.txt").is_file():
-            if json.loads(report_path.read_text(encoding="utf-8")).get("raw_sha256") == digest:
+            saved = json.loads(report_path.read_text(encoding="utf-8"))
+            if saved.get("raw_sha256") == digest and saved.get("version") == kb_meta_strip.VERSION:
                 return directory.name, "cached"
         clean, report = kb_meta_strip.strip_meta(raw)
         write_private(directory / "knowledge.txt", clean)
