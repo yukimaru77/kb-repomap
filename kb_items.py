@@ -21,15 +21,43 @@ DEFAULT_DEVELOPER_TEXT = (
 REPO_MAP_HEADER = "Current repository map. It supersedes maps inside older reused blobs.\n\n"
 
 
+# Codex inserts its own (non-encrypted) compaction summary as a user message with this prefix
+# (core/src/compact.rs). The KB's plaintext reuses that shape so Codex reads it as prior context.
+CODEX_SUMMARY_PREFIX = (
+    "Another language model started to solve this problem and produced a summary of its thinking process. "
+    "You also have access to the state of the tools that were used by that language model. "
+    "Use this to build on the work that has already been done and avoid duplicating work. "
+    "Here is the summary produced by the other language model, use the information in this summary "
+    "to assist with your own analysis:")
+# Distinguishes the KB summary from a real Codex compaction summary sharing the prefix.
+KB_TEXT_HEADER = "## Repository knowledge base (kb)"
+KB_TEXT_MARKER = f"{CODEX_SUMMARY_PREFIX}\n{KB_TEXT_HEADER}\n"
+
+
+def kb_text_item(text):
+    """The decrypted KB as one user message shaped like Codex's own compaction summary."""
+    return {"type": "message", "role": "user", "content": [
+        {"type": "input_text", "text": KB_TEXT_MARKER + text.strip() + "\n"}]}
+
+
 def developer_item(text):
     return {"type": "message", "role": "developer", "content": [
         {"type": "input_text", "text": text}]}
 
 
-def load_session_items(path, *, developer_text=None):
-    """Return the KB items followed by the store dev.txt (if any), without touching the snapshot."""
+def load_session_items(path, *, developer_text=None, kb_text=None):
+    """Return the KB items followed by the store dev.txt (if any), without touching the snapshot.
+
+    With `kb_text` (the published decrypted plaintext of this KB) the compaction blobs are replaced
+    by one user message holding that text; other snapshot items keep their place."""
     items = []
+    placed = False
     for item in load_items(path):
+        if kb_text is not None and item.get("type") in COMPACTION_TYPES:
+            if not placed:
+                items.append(kb_text_item(kb_text))
+                placed = True
+            continue
         content = item.get("content")
         text = content if isinstance(content, str) else "".join(
             part.get("text", "") for part in content or [] if isinstance(part, dict))

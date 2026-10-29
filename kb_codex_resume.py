@@ -20,7 +20,7 @@ import time
 
 from kb_api import COMPACTION_TYPES
 from kb_fork_mint import CHARTER
-from kb_items import DEFAULT_DEVELOPER_TEXT, REPO_MAP_HEADER
+from kb_items import DEFAULT_DEVELOPER_TEXT, KB_TEXT_MARKER, REPO_MAP_HEADER
 
 
 # Origin of threads kb itself creates through the app-server (clientInfo.name).
@@ -243,7 +243,8 @@ def kb_markers(kb_items):
 
 def _kb_user(item, texts, kb_thread):
     text = _text(item)
-    return text in texts or (kb_thread and text.startswith(REPO_MAP_HEADER))
+    return (text in texts or text.startswith(KB_TEXT_MARKER)
+            or (kb_thread and text.startswith(REPO_MAP_HEADER)))
 
 
 def convert(history, kb_items, *, kb_thread=False):

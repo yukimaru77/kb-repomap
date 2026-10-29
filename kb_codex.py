@@ -105,7 +105,7 @@ REMOTE_SEED_TEXT = "This thread uses a remote KB; its material is supplied at in
 
 
 def start_session(jsonl, workspace, name, update_context, *, full_access=True, prompt=None, remote=None,
-                  run_initial_turn=None, overrides=(), developer_text=None, env=None):
+                  run_initial_turn=None, overrides=(), developer_text=None, env=None, kb_text=None):
     # Seeding a resumable session does not itself constitute a user request.
     run_initial_turn = prompt is not None and run_initial_turn is not False
     context_items = []
@@ -113,7 +113,8 @@ def start_session(jsonl, workspace, name, update_context, *, full_access=True, p
         context_items.append({"type": "message", "role": "developer", "content": [
             {"type": "input_text", "text": update_context}]})
     # Validate before starting Codex. Never import a producer's session metadata.
-    items = [*load_session_items(jsonl, developer_text=developer_text), *context_items] if remote is None else None
+    items = ([*load_session_items(jsonl, developer_text=developer_text, kb_text=kb_text), *context_items]
+             if remote is None else None)
     if remote is not None:
         # thread/start may open a prewarm socket before returning its ID.
         # Register, persist the new empty thread, then close this app-server so

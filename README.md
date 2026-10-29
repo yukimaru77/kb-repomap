@@ -101,6 +101,11 @@ kb octane --remote --rebuild always --clean codex
 （知識が混ざる行は残す。除く量が10%を超える判断や失敗時は元のまま。除いた行は `knowledge.json` に記録）。
 Claude用の読み込みは `knowledge.txt` を優先し、無ければ `raw.txt` を使います。
 
+`kb NAME codex`（`--remote`・resume/forkを含む）も、保存先の平文が今のKBのblobと一致していれば
+（`manifest.json` のblob IDの並びで確認）、compaction blobの代わりにこの平文を**user message 1件**として渡します。
+Codex自身の非暗号化compactと同じ前置き文に `## Repository knowledge base (kb)` を続けた形で、dev.txtはその後ろのdeveloper messageです。
+平文が無い・古い（起動時に再作成した直後など）場合や `KB_CODEX_KB=blobs` の場合はblobのまま渡します。
+
 blobのトークン数から±2%以内のテキストが出たblobは、その波で打ち切ります。範囲内が複数なら、いちばん近いトークン数を採用します。最後まで範囲内がなければ、最も近いトークン数を採用します。出力したテキスト、採用した `raw.txt`、選定理由を `<KB名>/decrypt/<ファイル名>/` にcommit/pushします。完了済みの呼び出しは再実行しません。
 
 `kb create` / `kb publish` / `kb publish-paper` は、KBを保存した直後に同じ復号を自動で実行し、Claude用の平文まで作ります。

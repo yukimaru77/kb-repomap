@@ -1,5 +1,6 @@
 """Start a local Claude Code session with a decrypted KB and dev.txt."""
 from functools import lru_cache
+import json
 import os
 from pathlib import Path
 import subprocess
@@ -52,6 +53,31 @@ def _decrypt_files(loaded, name, filename):
         text = store.git(repo, "show", f"{revision}:{chosen}").stdout
         files.append((chosen, text))
     return files
+
+
+def codex_kb_text(loaded, name, filename):
+    """Decrypted plaintext of exactly this KB's blobs for a Codex session, or None.
+
+    None (use the compaction blobs) when no plaintext is published or it was made from other blobs,
+    e.g. right after a launch-time rebuild that did not decrypt."""
+    from kb_api import COMPACTION_TYPES
+    from kb_items import load_items
+    blob_ids = [item.get("id") for item in load_items(loaded["jsonl"]) if item.get("type") in COMPACTION_TYPES]
+    if not blob_ids:
+        return None
+    repo, revision, _branch = store.sync_store(loaded["store"])
+    prefix = f"{name}/decrypt/{Path(filename).stem}"
+    shown = store.git(repo, "show", f"{revision}:{prefix}/manifest.json", check=False)
+    try:
+        manifest = json.loads(shown.stdout) if shown.returncode == 0 else None
+    except ValueError:
+        manifest = None
+    if not manifest or [blob.get("blob_id") for blob in manifest.get("blobs", [])] != blob_ids:
+        return None
+    files = _decrypt_files(loaded, name, filename)
+    if len(files) != len(blob_ids):
+        return None
+    return "\n\n".join(text.strip() for _path, text in files) + "\n"
 
 
 def build_context(loaded, name, filename):

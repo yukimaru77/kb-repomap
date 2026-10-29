@@ -375,6 +375,19 @@ def launch(args, config):
     return _launch(args, config)
 
 
+def codex_plaintext(loaded, name, filename):
+    """The published plaintext Codex should read instead of the blobs, or None.
+
+    KB_CODEX_KB=blobs keeps the compaction blobs. Any lookup failure also falls back to the blobs."""
+    if os.environ.get("KB_CODEX_KB", "").lower() == "blobs":
+        return None
+    from kb_claude import codex_kb_text
+    try:
+        return codex_kb_text(loaded, name, filename)
+    except (ValueError, OSError, KeyError, subprocess.CalledProcessError):
+        return None
+
+
 def _launch(args, config):
     additions = kb_developer.read_additions(args)
     loaded = store.find_kb(config, args.name, args.store, filename=args.file)
@@ -410,6 +423,9 @@ def _launch(args, config):
             print(f"再作成せず更新差分を追加します: {len(context.encode()):,} bytes", flush=True)
     elif not paper:
         print("KBは基準ブランチと同じcommitです。", flush=True)
+    kb_text = None if jsonl != loaded["jsonl"] else codex_plaintext(loaded, args.name, args.file)
+    print("Codexへの渡し方: " + ("復号済み平文をuser messageで渡します" if kb_text is not None
+                                  else "compaction blobをそのまま渡します"), flush=True)
     workspace = Path(args.workspace).expanduser().resolve()
     args.resolved_store = loaded["store"]["name"]
     developer = {}
@@ -418,6 +434,8 @@ def _launch(args, config):
         print(f"Developer instructions: {args.name}/dev.txt", flush=True)
     if additions:
         developer["developer_text"] = kb_developer.append_text(developer.get("developer_text"), additions)
+    if kb_text is not None:
+        developer["kb_text"] = kb_text
     if hasattr(args, "native_args"):
         from kb_native import run
         return run(args, config, jsonl, workspace, context, **developer)

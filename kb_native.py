@@ -53,9 +53,14 @@ def launch_remote(native_args, binder, workspace, *, runner=None):
                              runner=runner)
 
 
-def run(args, config, snapshot, workspace, context, *, developer_text=None):
+def _kb_text(kb_text):
+    """Pass the decrypted KB text only when there is one, keeping the blob-only calls unchanged."""
+    return {"kb_text": kb_text} if kb_text is not None else {}
+
+
+def run(args, config, snapshot, workspace, context, *, developer_text=None, kb_text=None):
     if args.remote:
-        remote = RemoteKB(config, snapshot, developer_text=developer_text)
+        remote = RemoteKB(config, snapshot, developer_text=developer_text, **_kb_text(kb_text))
         if context:
             remote.items.append({"type": "message", "role": "user", "content": [
                 {"type": "input_text", "text": context}]})
@@ -66,20 +71,21 @@ def run(args, config, snapshot, workspace, context, *, developer_text=None):
         return launch_remote(args.native_args, binder, workspace)
     from kb_native_local import command as local_command, resume_request, seed_overrides
     if resume_request(args.native_args):
-        return run_local_resume(args, snapshot, workspace, context, developer_text=developer_text)
+        return run_local_resume(args, snapshot, workspace, context, developer_text=developer_text,
+                                **_kb_text(kb_text))
     # Validate the command shape before creating a persisted session.
     local_command(args.native_args, "validation-only")
     session_id = kb_codex.start_session(snapshot, workspace, args.name, context,
                                          full_access=False, run_initial_turn=False,
                                          overrides=seed_overrides(args.native_args),
-                                         developer_text=developer_text)
+                                         developer_text=developer_text, **_kb_text(kb_text))
     command = local_command(args.native_args, session_id)
     command = with_config(command[1:], kb_codex.config_flags())
     os.chdir(workspace)
     os.execvp(command[0], command)
 
 
-def run_local_resume(args, snapshot, workspace, context, *, developer_text=None):
+def run_local_resume(args, snapshot, workspace, context, *, developer_text=None, kb_text=None):
     """`kb NAME codex [exec] resume|fork ID|--last`: resume a KB-converted copy of the thread.
 
     The original thread stays as it is. Codex creates a new thread holding the
@@ -91,7 +97,7 @@ def run_local_resume(args, snapshot, workspace, context, *, developer_text=None)
     from kb_native_local import resume_command, resume_request, seed_overrides
     request = resume_request(args.native_args)
     overrides = seed_overrides(args.native_args)
-    items = load_session_items(snapshot, developer_text=developer_text)
+    items = load_session_items(snapshot, developer_text=developer_text, kb_text=kb_text)
     if context:
         items.append(developer_item(context))
     with kb_codex.CodexAppServer(overrides) as server:
@@ -110,10 +116,10 @@ def run_local_resume(args, snapshot, workspace, context, *, developer_text=None)
 
 
 def run_legacy_remote(args, config, snapshot, workspace, context, *, developer_text=None,
-                      runner=None):
+                      runner=None, kb_text=None):
     """`kb codex NAME --remote`: seed a thread, then resume it behind kb's stealth proxy."""
     import kb_stealth
-    remote = RemoteKB(config, snapshot, developer_text=developer_text)
+    remote = RemoteKB(config, snapshot, developer_text=developer_text, **_kb_text(kb_text))
     # The seeded thread persists no KB item (only update context or a seed
     # marker), so the proxy inserts all items, dev.txt included; nothing is doubled.
     record = _record(args)
