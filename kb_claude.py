@@ -55,6 +55,24 @@ def _decrypt_files(loaded, name, filename):
     return files
 
 
+SCOPE_NOTE = ("Aliases, abbreviations and shorthand defined inside this section apply only within this "
+              "section; other sections may reuse the same symbols with different meanings.")
+
+
+def window_sections(loaded, files):
+    """Each plaintext wrapped as a numbered section that bounds the scope of its own aliases.
+
+    Section names come from the KB's domain windows when their count matches the plaintext files."""
+    windows = (loaded.get("info") or {}).get("windows") or []
+    total = len(files)
+    sections = []
+    for index, (_path, text) in enumerate(files, 1):
+        title = windows[index - 1].get("name") if len(windows) == total else None
+        heading = f"## KB section {index}/{total}" + (f": {title}" if title else "")
+        sections.append(f"{heading}\n> {SCOPE_NOTE}\n\n{text.strip()}\n\n## End of KB section {index}/{total}")
+    return sections
+
+
 def codex_kb_text(loaded, name, filename):
     """Decrypted plaintext of exactly this KB's blobs for a Codex session, or None.
 
@@ -77,7 +95,7 @@ def codex_kb_text(loaded, name, filename):
     files = _decrypt_files(loaded, name, filename)
     if len(files) != len(blob_ids):
         return None
-    return "\n\n".join(text.strip() for _path, text in files) + "\n"
+    return "\n\n".join(window_sections(loaded, files)) + "\n"
 
 
 def build_context(loaded, name, filename):
@@ -88,8 +106,7 @@ def build_context(loaded, name, filename):
         raise ValueError(
             f"復号済みKBがありません: {name}/{filename}。先に `kb decrypt {name} --file {filename}` を実行してください"
         )
-    for relative, text in files:
-        parts.append(f"## Decrypted KB material: {relative}\n\n{text.rstrip()}")
+    parts.extend(window_sections(loaded, files))
     # dev.txt follows the material, as guidance on how to use it.
     developer = loaded.get("developer_text")
     if developer and developer.strip():

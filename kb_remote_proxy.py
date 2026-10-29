@@ -97,7 +97,7 @@ CLAUDE_KB_FRAMING = (
 )
 # The last user message of a Claude Code compaction (summary) request.
 CLAUDE_COMPACTION_ANCHOR = "Your task is to create a detailed summary of the conversation so far"
-CLAUDE_KB_MARKERS = ("## Decrypted KB material:", "## KB developer notes")
+CLAUDE_KB_MARKERS = ("## KB section ", "## Decrypted KB material:", "## KB developer notes")
 _SYSTEM_REMINDER = "<system-reminder>"
 _LEADING_REMINDER = re.compile(r"\s*<system-reminder>.*?</system-reminder>", re.DOTALL)
 _CLAUDE_LOGGED = set()

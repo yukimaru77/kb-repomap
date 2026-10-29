@@ -43,7 +43,7 @@ class ClaudeContextTests(unittest.TestCase):
 
     def test_dev_notes_follow_all_decrypted_material(self):
         text = kb_claude.build_context(self.loaded, "example", "latest.json")
-        material = text.index("## Decrypted KB material: example/decrypt/latest/01-blob/raw.txt")
+        material = text.index("## KB section 1/1\n> " + kb_claude.SCOPE_NOTE + "\n\n復号された知識")
         notes = text.index("## KB developer notes\n\n記録の場所")
         self.assertLess(material, notes)
         self.assertLess(text.index("復号された知識"), notes)

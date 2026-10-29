@@ -100,6 +100,8 @@ kb octane --remote --rebuild always --clean codex
 各blobについて、モデルに「会話・指示だけの行」の範囲を選ばせ、その行だけを機械的に除いた `knowledge.txt` も保存します
 （知識が混ざる行は残す。除く量が10%を超える判断や失敗時は元のまま。除いた行は `knowledge.json` に記録）。
 Claude用の読み込みは `knowledge.txt` を優先し、無ければ `raw.txt` を使います。
+各blobの平文は `## KB section i/N: <窓の名前>` 〜 `## End of KB section i/N` で囲み、
+「この節で定義した略号はこの節の中だけで有効」という注記を付けて渡します（窓ごとに同じ記号を別の意味で使うため）。
 
 `kb NAME codex`（`--remote`・resume/forkを含む）も、保存先の平文が今のKBのblobと一致していれば
 （`manifest.json` のblob IDの並びで確認）、compaction blobの代わりにこの平文を**user message 1件**として渡します。

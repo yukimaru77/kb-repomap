@@ -67,7 +67,19 @@ class CodexKbTextTest(unittest.TestCase):
 
     def test_matching_manifest_returns_knowledge_text_in_blob_order(self):
         manifest = {"blobs": [{"blob_id": "cmp_a"}, {"blob_id": "cmp_b"}]}
-        self.assertEqual(self.run_lookup(manifest, self.FILES), "CLEAN A\n\nRAW B\n")
+        text = self.run_lookup(manifest, self.FILES)
+        self.assertLess(text.index("CLEAN A"), text.index("RAW B"))
+        self.assertNotIn("RAW A", text)
+        self.assertIn("## KB section 1/2\n> " + kb_claude.SCOPE_NOTE + "\n\nCLEAN A\n\n## End of KB section 1/2", text)
+        self.assertIn("## KB section 2/2", text)
+
+    def test_section_titles_come_from_windows_when_counts_match(self):
+        files = [("a/raw.txt", "A"), ("b/raw.txt", "B")]
+        named = kb_claude.window_sections({"info": {"windows": [{"name": "Billing"}, {"name": "Keys"}]}}, files)
+        self.assertTrue(named[0].startswith("## KB section 1/2: Billing\n"))
+        self.assertTrue(named[1].startswith("## KB section 2/2: Keys\n"))
+        plain = kb_claude.window_sections({"info": {"windows": [{"name": "only one"}]}}, files)
+        self.assertTrue(plain[0].startswith("## KB section 1/2\n"))
 
     def test_stale_or_missing_plaintext_falls_back_to_blobs(self):
         self.assertIsNone(self.run_lookup({"blobs": [{"blob_id": "cmp_old"}, {"blob_id": "cmp_b"}]}, self.FILES))
