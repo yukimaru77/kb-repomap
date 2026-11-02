@@ -436,18 +436,24 @@ def load_windows(args, included, block_tokens, contents):
         # The whole repository fits one window; there is nothing to design.
         windows = [{"name": "repository", "rationale": "the whole repository in one window", "files": files}]
     else:
+        previous = (json.loads(Path(args.windows_previous).expanduser().read_text(encoding="utf-8"))
+                    if args.windows_previous else None)
         knowledge = (Path(args.windows_knowledge).expanduser().read_text(encoding="utf-8")
-                     if args.windows_knowledge else None)
+                     if args.windows_knowledge and not previous else None)
         print(f"designing {count} domain windows of about {sum(tokens.values()) // count} tokens "
               f"(cap {args.windows_cap}) for {len(files)} files", file=sys.stderr, flush=True)
         try:
             windows = kb_partition.design(
                 files, tokens, {path.as_posix(): contents[path] for path in included}, knowledge=knowledge,
-                count=count, cap=args.windows_cap, model=args.model, effort=args.effort,
+                count=count, cap=args.windows_cap, previous=previous, model=args.model, effort=args.effort,
             )
         except RuntimeError as error:
-            print(f"warning: {error}; falling back to directory packs", file=sys.stderr, flush=True)
-            return None
+            if previous:
+                print(f"warning: {error}; keeping the previous windows, split to the cap", file=sys.stderr, flush=True)
+                windows = kb_partition.repair(previous, files, tokens, args.windows_cap)
+            else:
+                print(f"warning: {error}; falling back to directory packs", file=sys.stderr, flush=True)
+                return None
     if path is not None:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(windows, ensure_ascii=False, indent=1), encoding="utf-8")
@@ -498,6 +504,8 @@ def main():
                         help="target source tokens per designed domain window")
     parser.add_argument("--windows-knowledge", help="UTF-8 text describing the repository (e.g. the previous KB) "
                                                     "given to the window designer")
+    parser.add_argument("--windows-previous", help="JSON of an earlier window layout; the designer rebalances it, "
+                                                   "and it is kept (split to the cap) if designing fails")
     parser.add_argument("--window-max-tokens", type=int, default=470_000,
                         help="hard input limit per domain window; larger windows are split")
     args = parser.parse_args()

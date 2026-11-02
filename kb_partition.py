@@ -170,10 +170,30 @@ def repair(windows, files, tokens, cap):
     return result
 
 
-def design(files, tokens, texts, *, knowledge=None, count=11, cap=400_000,
+def previous_context(previous, files, tokens):
+    """Compact description of an earlier layout: window names, purposes and current sizes."""
+    where = {path: index for index, window in enumerate(previous) for path in window.get("files", [])}
+    lines = ["=== Previous domain windows (the file list marks each file's previous window as [wN]) ==="]
+    for index, window in enumerate(previous):
+        size = sum(tokens[path] for path in window.get("files", []) if path in tokens)
+        lines.append(f"[w{index}] {window.get('name', '')} — {window.get('rationale', '')} ({size} tokens now)")
+    lines.append("Reuse these domains: keep files of one domain together, split windows that are too large "
+                 "and merge small related ones so the new windows are balanced. Unmarked files are new.")
+    return "\n".join(lines), {path: f"[w{where[path]}]" for path in files if path in where}
+
+
+def design(files, tokens, texts, *, knowledge=None, count=11, cap=400_000, previous=None,
            model=kb_api.DEFAULT_MODEL, effort=kb_api.DEFAULT_EFFORT, attempts=3, caller=None):
-    """Ask the model for domain windows, then repair them into a valid partition."""
-    if knowledge:
+    """Ask the model for domain windows, then repair them into a valid partition.
+
+    With `previous` (an earlier layout) the prompt carries that layout instead of the long KB text,
+    which keeps the request well inside the upstream's time limit."""
+    if previous:
+        knowledge, marks = previous_context(previous, files, tokens)
+        listed = [f"{path} {marks[path]}" if path in marks
+                  else (f"{path} :: {hint}" if (hint := file_index_line(path, texts[path])) else path)
+                  for path in files]
+    elif knowledge:
         listed = files
     else:
         listed = [f"{path} :: {hint}" if (hint := file_index_line(path, texts[path])) else path for path in files]

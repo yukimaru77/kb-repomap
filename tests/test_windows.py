@@ -85,6 +85,20 @@ class PartitionRepairTest(unittest.TestCase):
         self.assertIn("No previous knowledge", prompts[0])
         self.assertEqual(windows[0]["files"], ["ui/x.tsx", "api/x.ts", "docs/x.md"])
 
+    def test_design_with_previous_layout_marks_files_and_skips_knowledge(self):
+        files = ["ui/a.tsx", "api/a.ts", "api/new.ts"]
+        seen = []
+        def caller(prompt, model, effort):
+            seen.append(prompt)
+            return json.dumps({"windows": [{"name": "a", "files": [0, 1, 2]}]})
+        previous = [{"name": "Billing", "rationale": "charges", "files": ["ui/a.tsx", "api/a.ts"]}]
+        kb_partition.design(files, {path: 5 for path in files}, {path: "export const N = 1" for path in files},
+                            knowledge="HUGE KB", previous=previous, caller=caller)
+        self.assertNotIn("HUGE KB", seen[0])
+        self.assertIn("[w0] Billing — charges (10 tokens now)", seen[0])
+        self.assertIn("ui/a.tsx [w0]", seen[0])
+        self.assertIn("api/new.ts :: exports N", seen[0])
+
     def test_design_uses_knowledge_instead_of_index(self):
         files = ["a.ts"]
         seen = []
@@ -218,6 +232,18 @@ class WindowBuildTest(unittest.TestCase):
         design.assert_not_called()
         self.assertEqual([window["name"] for window in state["windows"]], ["repository"])
         self.assertEqual(len(self.calls), 1)
+
+    def test_failed_redesign_keeps_previous_windows_split_to_cap(self):
+        self.windows.unlink()
+        previous = self.root / "previous.json"
+        previous.write_text(json.dumps([{"name": "all", "rationale": "", "files": [
+            "ui/billing/page.tsx", "api/billing.ts", "api/keys.ts", "ui/keys/page.tsx"]}]))
+        with mock.patch("kb_partition.design", side_effect=RuntimeError("window design failed: timeout")) as design:
+            state = self.build(self.root / "first", extra=("--design-windows", "0", "--windows-cap", "100",
+                                                           "--windows-previous", str(previous)))
+        self.assertTrue(design.call_args.kwargs["previous"])
+        self.assertTrue(all(window["name"].startswith("all") for window in state["windows"]))
+        self.assertGreater(len(state["windows"]), 1)
 
     def test_failed_design_falls_back_to_directory_packs(self):
         self.windows.unlink()

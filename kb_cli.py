@@ -96,7 +96,11 @@ def rebuild(name, info, commit, config, previous=None, knowledge=None, *, build_
     elif info.get("windows"):
         windows_file.write_text(json.dumps(info["windows"], ensure_ascii=False))
     window_args = ["--windows", str(windows_file)]
-    if knowledge and not info.get("windows"):
+    if info.get("previous_windows") and not resumed_windows and not info.get("windows"):
+        previous_file = build_root / "windows-previous.json"
+        previous_file.write_text(json.dumps(info["previous_windows"], ensure_ascii=False))
+        window_args += ["--windows-previous", str(previous_file)]
+    elif knowledge and not info.get("windows"):
         knowledge_file = build_root / "windows-knowledge.txt"
         knowledge_file.write_text(knowledge, encoding="utf-8")
         knowledge_file.chmod(0o600)
@@ -286,17 +290,22 @@ def create_kb(name, loaded, commit, config, filename="latest.json", *, previous=
         build_options["workers"] = workers
     print(f"KBを作成します: {name}@{commit} / store: {loaded['store']['name']}", flush=True)
     base_info = dict(loaded["info"])
-    if repartition and base_info.pop("windows", None) is not None:
-        print("--repartition: ドメイン窓を設計し直します。", flush=True)
+    previous_windows = base_info.pop("windows", None) if repartition else None
+    if previous_windows is not None:
+        print("--repartition: 今のドメイン窓をもとに、窓を設計し直します。", flush=True)
     if clean:
         print("--clean: 前回blobを再利用せず全体を作り直します。", flush=True)
         previous = None
     elif previous is None and loaded.get("jsonl"):
         previous = loaded
     knowledge = None
-    if not base_info.get("windows"):
+    if previous_windows is not None:
+        build_info = {**base_info, "previous_windows": previous_windows}
+    else:
+        build_info = base_info
+    if not base_info.get("windows") and previous_windows is None:
         knowledge = window_knowledge(config, name, loaded["store"]["name"], filename, previous)
-    jsonl = rebuild(name, base_info, commit, config, previous,
+    jsonl = rebuild(name, build_info, commit, config, previous,
                     **({"knowledge": knowledge} if knowledge else {}), **build_options)
     info = {**base_info, "source_commit": commit}
     from kb_incremental import manifest_from_state

@@ -231,6 +231,7 @@ def main():
     parser.add_argument("--max-file-bytes", type=int, help="override config max_file_bytes")
     parser.add_argument("--windows", help="domain windows JSON (read if present, written after design)")
     parser.add_argument("--windows-knowledge", help="UTF-8 repository knowledge for the window designer")
+    parser.add_argument("--windows-previous", help="earlier window layout JSON for the designer to rebalance")
     parser.add_argument("--directory-packs", action="store_true", help="ignore config.windows and pack by directory")
     parser.add_argument("--exclude", action="append", default=[],
                         help="drop matching source paths before packing (prefix or glob); repeatable")
@@ -336,6 +337,8 @@ def main():
                     "--window-max-tokens", str(config["windows_max_tokens"])]
         if args.windows_knowledge:
             command += ["--windows-knowledge", str(Path(args.windows_knowledge).expanduser().resolve())]
+        if args.windows_previous:
+            command += ["--windows-previous", str(Path(args.windows_previous).expanduser().resolve())]
         if reading_file is None:
             reading_file = str(DEFAULT_CONFIG.with_name(config["windows_reading_instructions"]))
     for option, value in (("--reading-instructions-file", reading_file),
