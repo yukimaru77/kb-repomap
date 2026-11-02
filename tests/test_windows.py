@@ -47,6 +47,26 @@ class PartitionRepairTest(unittest.TestCase):
         self.assertEqual([window["name"] for window in fixed], ["a (part 1)", "a (part 2)"])
         self.assertEqual(fixed[0]["files"], ["a/1.ts", "a/2.ts"])
 
+    def test_balanced_split_computes_part_count_then_equalizes(self):
+        members = [f"f{i}" for i in range(10)]
+        tokens = dict(zip(members, [50, 40, 90, 10, 60, 70, 30, 80, 20, 50]))
+        parts = kb_partition.balanced_split(members, tokens, 200)
+        sizes = [sum(tokens[path] for path in part) for part in parts]
+        self.assertEqual(len(parts), 3)  # ceil(500 / 200)
+        self.assertEqual(sum(parts, []), members)
+        self.assertLessEqual(max(sizes), 180)  # greedy fill would give 190, 190, 120
+        self.assertEqual(kb_partition.balanced_split(["a", "b"], {"a": 1, "b": 1}, 10), [["a", "b"]])
+        self.assertEqual(kb_partition.balanced_split(["big", "x"], {"big": 700, "x": 10}, 300), [["big"], ["x"]])
+
+    def test_window_count_leaves_headroom_below_cap(self):
+        self.assertEqual(kb_partition.window_count(3_850_000, 300_000), 15)
+        self.assertEqual(kb_partition.window_count(100, 300_000), 1)
+
+    def test_design_prompt_asks_for_equal_windows_of_target_size(self):
+        prompt = kb_partition.design_prompt(["a", "b"], {"a": 600, "b": 400}, None, 4, 300)
+        self.assertIn("about 4 windows of roughly equal size", prompt)
+        self.assertIn("about 250 tokens each", prompt)
+
     def test_design_retries_unparseable_output_and_repairs(self):
         files = ["ui/x.tsx", "api/x.ts", "docs/x.md"]
         tokens = {path: 5 for path in files}

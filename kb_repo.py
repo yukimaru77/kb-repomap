@@ -416,7 +416,7 @@ def window_reading(template, window):
 
 def load_windows(args, included, block_tokens, contents):
     """Domain windows for this build, or None for directory packing."""
-    if not args.windows and not args.design_windows:
+    if not args.windows and args.design_windows is None:
         return None
     files = [path.as_posix() for path in included]
     tokens = {path.as_posix(): block_tokens[path] for path in included}
@@ -426,23 +426,24 @@ def load_windows(args, included, block_tokens, contents):
         if not isinstance(windows, list):
             raise SystemExit(f"--windows must be a JSON list: {path}")
         return windows
-    if not args.design_windows:
+    if args.design_windows is None:
         raise SystemExit(f"--windows not found: {path}")
     if args.dry_run:
         raise SystemExit("--design-windows calls the model; run without --dry-run first or pass --windows")
     import kb_partition
+    count = args.design_windows or kb_partition.window_count(sum(tokens.values()), args.windows_cap)
     if sum(tokens.values()) <= args.windows_cap:
         # The whole repository fits one window; there is nothing to design.
         windows = [{"name": "repository", "rationale": "the whole repository in one window", "files": files}]
     else:
         knowledge = (Path(args.windows_knowledge).expanduser().read_text(encoding="utf-8")
                      if args.windows_knowledge else None)
-        print(f"designing about {args.design_windows} domain windows for {len(files)} files",
-              file=sys.stderr, flush=True)
+        print(f"designing {count} domain windows of about {sum(tokens.values()) // count} tokens "
+              f"(cap {args.windows_cap}) for {len(files)} files", file=sys.stderr, flush=True)
         try:
             windows = kb_partition.design(
                 files, tokens, {path.as_posix(): contents[path] for path in included}, knowledge=knowledge,
-                count=args.design_windows, cap=args.windows_cap, model=args.model, effort=args.effort,
+                count=count, cap=args.windows_cap, model=args.model, effort=args.effort,
             )
         except RuntimeError as error:
             print(f"warning: {error}; falling back to directory packs", file=sys.stderr, flush=True)
@@ -491,7 +492,8 @@ def main():
     parser.add_argument("--windows", help="JSON domain windows [{name, rationale, files}] used as packs; "
                                           "designed and written here when missing and --design-windows is set")
     parser.add_argument("--design-windows", type=int, metavar="N",
-                        help="ask the model for about N domain windows when --windows does not exist yet")
+                        help="design domain windows when --windows does not exist yet; "
+                             "N windows, or 0 to compute the count from the total size and --windows-cap")
     parser.add_argument("--windows-cap", type=int, default=400_000,
                         help="target source tokens per designed domain window")
     parser.add_argument("--windows-knowledge", help="UTF-8 text describing the repository (e.g. the previous KB) "

@@ -3,14 +3,16 @@
 chunk_tokens: 150000
 map_tokens: 10000
 
-# Pack layout. directory: pack files by directory (legacy). domain: the model designs about
-# `count` cross-layer DOMAIN windows (UI+BFF+Gateway+DB+tests+docs of one feature) of at most
-# `max_tokens` source tokens; the layout is stored with the KB and reused by later rebuilds.
+# Pack layout. directory: pack files by directory (legacy). domain: the model designs cross-layer
+# DOMAIN windows (UI+BFF+Gateway+DB+tests+docs of one feature) of at most `max_tokens` source tokens;
+# the layout is stored with the KB and reused by later rebuilds. `count: auto` computes the window
+# count as ceil(total / (0.9 * max_tokens)) and asks for windows of about total/count tokens.
+# A window that grows past `max_tokens` is split into the fewest, most equal parts.
 # Each window is compacted with `reading_instructions` ({NAME}/{RATIONALE} are filled in).
 windows:
   mode: domain
-  count: 11
-  max_tokens: 400000
+  count: auto
+  max_tokens: 300000
   reading_instructions: domain-reading-instructions.txt
 
 # Second-stage compaction is opt-in: group by blob count or measured output tokens.

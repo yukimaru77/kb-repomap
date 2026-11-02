@@ -24,6 +24,8 @@ def design_prompt(files, tokens, knowledge, count, cap):
                    + knowledge)
     else:
         context = "=== No previous knowledge; use paths and the per-file index above to infer domains ==="
+    total = sum(tokens.values())
+    target = total // max(1, count)
     return f"""Below is the full list of {len(files)} repository files (index, tokens, path [:: exports/tests/sql/headings]), then context about the repository.
 
 Goal: partition ALL files into about {count} DOMAIN windows. Each window will be read in full by one model at once and compacted, so a window must group files that must be understood TOGETHER: one business/technical domain across ALL layers — UI pages/components/hooks/parsers + their tests/stories, BFF routes, server modules, SQL migrations that define their tables, unit/HTTP tests, DB tests, e2e cases, user docs/runbooks, infra pieces specific to that domain. Prefer vertical (feature) slices over horizontal (layer) slices. Shared/generic infrastructure (design system, generic libs, CI, base infra, tooling) can form their own windows.
@@ -31,7 +33,8 @@ Goal: partition ALL files into about {count} DOMAIN windows. Each window will be
 Hard constraints:
 - Every file index appears in exactly one window.
 - Sum of tokens per window <= {cap}. (Very large standalone data files may form their own window.)
-- About {count} windows.
+- Exactly about {count} windows of roughly equal size: aim for about {target} tokens each (the total is {total}).
+  Keep domains intact, but prefer merging small related domains and splitting large ones so sizes stay balanced.
 
 Output JSON: {{"windows":[{{"name":"...","rationale":"one line: what cross-layer story this window captures","files":[indices...]}}]}}
 
@@ -94,6 +97,49 @@ def affinity(path, members):
     return best
 
 
+# Designed windows are asked to be about total/count tokens; leave headroom below the cap so
+# windows the model makes a little larger than the target still fit without splitting.
+FILL = 0.9
+
+
+def window_count(total_tokens, cap):
+    """How many windows a repository of total_tokens needs so each is about FILL*cap or less."""
+    return max(1, -(-int(total_tokens) // max(1, int(cap * FILL))))
+
+
+def balanced_split(members, tokens, cap):
+    """Split ordered members into the fewest contiguous parts within cap, as equal in tokens as possible.
+
+    The part count is computed first (ceil(total/cap), more only if file sizes force it); then the
+    largest part is minimized for that count (binary search over the greedy fill). A single file
+    larger than cap becomes its own part."""
+    sizes = [tokens[path] for path in members]
+    total = sum(sizes)
+    if total <= cap or len(members) <= 1:
+        return [list(members)]
+
+    def fill(limit):
+        parts, used = [[]], 0
+        for path, size in zip(members, sizes):
+            if parts[-1] and used + size > limit:
+                parts.append([])
+                used = 0
+            parts[-1].append(path)
+            used += size
+        return parts
+
+    largest = max(sizes)
+    parts = max(2, -(-total // cap), len(fill(max(cap, largest))))
+    low, high = max(largest, -(-total // parts)), max(cap, largest)
+    while low < high:
+        middle = (low + high) // 2
+        if len(fill(middle)) <= parts:
+            high = middle
+        else:
+            low = middle + 1
+    return fill(low)
+
+
 def repair(windows, files, tokens, cap):
     """Make windows an exact partition of files within cap; deterministic."""
     known = set(files)
@@ -117,15 +163,7 @@ def repair(windows, files, tokens, cap):
     result = []
     for window in fixed:
         members = sorted(window["files"], key=order.get)
-        parts, current, used = [], [], 0
-        for path in members:
-            if current and used + tokens[path] > cap:
-                parts.append(current)
-                current, used = [], 0
-            current.append(path)
-            used += tokens[path]
-        if current:
-            parts.append(current)
+        parts = balanced_split(members, tokens, cap)
         for number, part in enumerate(parts, 1):
             name = window["name"] if len(parts) == 1 else f"{window['name']} (part {number})"
             result.append({"name": name, "rationale": window.get("rationale", ""), "files": part})

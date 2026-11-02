@@ -170,14 +170,18 @@ def load_config(path):
         "thin_blob_threshold": data.get("thin_blob_threshold", 2_000),
         "map_tokens": data.get("map_tokens", 10_000),
         "windows_mode": windows.get("mode", "directory"),
-        "windows_count": windows.get("count", 11),
-        "windows_max_tokens": windows.get("max_tokens", 400_000),
+        "windows_count": windows.get("count", "auto"),
+        "windows_max_tokens": windows.get("max_tokens", 300_000),
         "windows_reading_instructions": windows.get("reading_instructions", "domain-reading-instructions.txt"),
     }
+    if config["windows_count"] == "auto":
+        config["windows_count"] = 0
+    if not isinstance(config["windows_count"], int) or config["windows_count"] < 0:
+        raise SystemExit("config.windows.count must be auto or a non-negative integer")
     if config["windows_mode"] not in {"directory", "domain"}:
         raise SystemExit("config.windows.mode must be directory or domain")
     for key in ("chunk_tokens", "second_stage_budget_tokens", "second_stage_count", "workers", "max_file_bytes", "map_tokens",
-                "windows_count", "windows_max_tokens"):
+                "windows_max_tokens"):
         if not isinstance(config[key], int) or config[key] <= 0:
             raise SystemExit(f"config.{key} must be a positive integer")
     if not isinstance(config["thin_blob_threshold"], int) or config["thin_blob_threshold"] < 0:
@@ -328,7 +332,8 @@ def main():
         windows_file = Path(args.windows).expanduser().resolve() if args.windows else (
             Path(kb_api.STATE_ROOT) / name / "windows.json")
         command += ["--windows", str(windows_file), "--design-windows", str(config["windows_count"]),
-                    "--windows-cap", str(config["windows_max_tokens"])]
+                    "--windows-cap", str(config["windows_max_tokens"]),
+                    "--window-max-tokens", str(config["windows_max_tokens"])]
         if args.windows_knowledge:
             command += ["--windows-knowledge", str(Path(args.windows_knowledge).expanduser().resolve())]
         if reading_file is None:

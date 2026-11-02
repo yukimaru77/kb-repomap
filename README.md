@@ -781,7 +781,8 @@ Codex側の設定・ログイン・環境変数を変更する処理はありま
 ディレクトリ単位のパックでは、画面・BFF・Gateway・DB・テストが別々のblobに分かれ、
 層をまたぐつながりが残りません。既定ではパックを**ドメイン窓**にします。
 
-1. 初回はモデル（`model`/`effort`）が全ファイル一覧を見て、約 `windows.count` 個の窓を設計する。
+1. 初回はモデル（`model`/`effort`）が全ファイル一覧を見て窓を設計する。窓の数は `windows.count: auto` なら
+   まず ceil(全トークン ÷ (0.9 × `windows.max_tokens`)) で決め、1窓あたり「全トークン ÷ 窓の数」程度の等分を求める。
    1窓は1つの業務・技術ドメインを全層で含む縦切り（例: 決済＝Billing画面・BFF・決済処理・
    migration・テスト・runbook）で、`windows.max_tokens` 以下。判断材料には前回KBの復号済み本文を使い、
    無ければファイルごとのexport・テスト名・SQL・見出しを機械抽出した索引を使う。
@@ -791,6 +792,8 @@ Codex側の設定・ログイン・環境変数を変更する処理はありま
    （窓の名前・狙いを差し込み、層横断のつながり・食い違いを高密度表記で保持させる指示）を付ける。
 3. 窓の割り当ては保存先のKB情報（`windows`）に保存され、次回以降の再作成で再利用される。
    変更ファイルを含む窓だけを圧縮し直し、新規ファイルは同じディレクトリのファイルが最も多い窓へ入る。
+   育って `windows.max_tokens` を超えた窓は、まず必要な個数（ceil(大きさ ÷ 上限)）を計算し、
+   ファイル順のまま最大の部分が最小になるよう等分する（`(part 1)` `(part 2)` …）。
    `--clean` でも割り当ては維持する。`kb create NAME --repartition` で設計し直し、
    `kb create NAME --windows layout.json` で割り当て `[{"name","rationale","files"}]` を指定できる。
 
@@ -819,7 +822,7 @@ mapは構造・識別子の抜粋で、従来のLLMによる業務・設計解�
 - `--prelude-file metadata.md`: 追加資料を別blobとして先頭へ置く。二段階圧縮の対象外。
 
 [config.yaml](config.yaml) の既定値は `gpt-6.1-sol / high`、最大12並列、map予算10K、
-**ドメイン窓（約11窓・1窓400K以下）**、**二次圧縮なし**です。ディレクトリ単位（`windows.mode: directory`）の
+**ドメイン窓（窓の数は自動計算・1窓300K以下）**、**二次圧縮なし**です。ディレクトリ単位（`windows.mode: directory`）の
 一次パック予算は150Kです。
 `gpt-6.1-sol` はコンテキスト長が2倍(500K)なので、このモデルのときは config/既定値由来の
 token予算(`chunk_tokens`・`map_tokens`・`two_stage.token_budget`・`merge-old`/`build` の既定値)を
