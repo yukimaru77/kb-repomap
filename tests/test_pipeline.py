@@ -139,7 +139,7 @@ class PipelineTest(unittest.TestCase):
                     self.assertEqual(body["instructions"], expected_api)
                     self.assertEqual(body["input"][-1], {"type": "compaction_trigger"})
                     self.assertEqual(body["model"], "gpt-6.1-sol")
-                    self.assertEqual(body["reasoning"], {"effort": "xhigh"})
+                    self.assertEqual(body["reasoning"], {"effort": "high"})
                 for _, body in calls[first_stage_calls:]:
                     self.assertEqual(sum(x.get("type") == "compaction" for x in body["input"]), 2)
                 first_count = len(calls)

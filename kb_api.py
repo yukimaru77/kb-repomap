@@ -9,7 +9,7 @@ from http.client import IncompleteRead
 
 COMPACTION_TYPES = {"compaction", "compaction_summary", "context_compaction"}
 DEFAULT_MODEL = "gpt-6.1-sol"
-DEFAULT_EFFORT = "xhigh"
+DEFAULT_EFFORT = "high"
 # Models whose context window is twice the usual one (gpt-6.1-sol: 500K vs 272K).
 # Token budgets taken from config or defaults are multiplied by this; explicit CLI values are not.
 CONTEXT_SCALE = {"gpt-6.1-sol": 2}

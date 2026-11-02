@@ -23,7 +23,7 @@ class ConfigTest(unittest.TestCase):
         self.assertEqual(config["workers"], 12)
         self.assertEqual(config["map_tokens"], 10000)
         self.assertEqual(config["model"], "gpt-6.1-sol")
-        self.assertEqual(config["effort"], "xhigh")
+        self.assertEqual(config["effort"], "high")
 
     def test_omitted_two_stage_config_is_disabled(self):
         with tempfile.TemporaryDirectory() as temp:

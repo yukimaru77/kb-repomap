@@ -22,7 +22,7 @@ two_stage:
 
 # Used by both v2 compaction (repository map generation has no LLM).
 model: gpt-6.1-sol
-effort: xhigh
+effort: high
 
 # Operational tuning.
 workers: 12
