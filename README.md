@@ -142,7 +142,8 @@ kb octane pi                 # Piを起動し、最初のセッションに octa
 kb octane --store pepabo pi --model sonnet "質問"   # pi の引数はそのまま渡す
 ```
 
-[pi-kb](https://github.com/yukimaru77/pi-kb) 拡張が必要です。`kb` は `PI_KB_AUTOLOAD` に `/kb` と同じ引数を入れて `pi` を起動し、
+[pi-kb](https://github.com/yukimaru77/pi-kb) 拡張が必要です。kbコマンドが無い人は、`~/.pi/agent/kb.json`（またはプロジェクトの `.pi/kb.json`）に
+保存先を書けば `pi --kb octane` で同じことができます（保存先をgitで直接読みます）。`kb` は `PI_KB_AUTOLOAD` に `/kb` と同じ引数を入れて `pi` を起動し、
 拡張が最初のセッションの開始時に一度だけ挿入します（同じKBを持つ再開セッションには挿入しない）。
 KBを挿入したセッションでは、Piの下部ステータスに `📚 KB: octane` と表示されます。
 
