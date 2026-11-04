@@ -135,6 +135,17 @@ kb list
 別名だけを作成した場合、`latest.json` の行は「未作成」のままです。
 `kb codex --file ...` の起動時も、そのファイルの作成commitから差分を確認します。
 
+## PiでKBを開く
+
+```bash
+kb octane pi                 # Piを起動し、最初のセッションに octane を挿入（/kb octane と同じ）
+kb octane --store pepabo pi --model sonnet "質問"   # pi の引数はそのまま渡す
+```
+
+[pi-kb](https://github.com/yukimaru77/pi-kb) 拡張が必要です。`kb` は `PI_KB_AUTOLOAD` に `/kb` と同じ引数を入れて `pi` を起動し、
+拡張が最初のセッションの開始時に一度だけ挿入します（同じKBを持つ再開セッションには挿入しない）。
+KBを挿入したセッションでは、Piの下部ステータスに `📚 KB: octane` と表示されます。
+
 ## Claude Codeで復号済みKBを開く
 
 復号済みのKBをClaude Codeへ渡す場合は、`decrypt/<ファイル名>/` 配下の選択済み `raw.txt`

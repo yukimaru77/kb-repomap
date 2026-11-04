@@ -10,7 +10,7 @@ def client_boundary(argv):
     while index < len(argv):
         if argv[index] in valued:
             index += 2
-        elif argv[index] in ("codex", "claude"):
+        elif argv[index] in ("codex", "claude", "pi"):
             return index
         else:
             index += 1

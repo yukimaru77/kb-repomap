@@ -467,6 +467,31 @@ def _launch(args, config):
     os.execvp(command[0], command)
 
 
+def launch_pi(kb_argv, pi_args):
+    """`kb NAME [--store S] [--file F] [--workspace DIR] pi [PI args...]`: start Pi with the pi-kb
+    extension loading NAME into the first session, the same as running `/kb NAME` right after start."""
+    parser = argparse.ArgumentParser(prog="kb NAME [KB options] pi [PI args...]", allow_abbrev=False)
+    parser.add_argument("name", type=store.name_value)
+    parser.add_argument("--store")
+    parser.add_argument("--file")
+    parser.add_argument("--workspace", default=".")
+    args = parser.parse_args(kb_argv)
+    command = ["pi", *pi_args]
+    if any(value in ("--help", "-h", "--version", "-v") for value in pi_args):
+        os.execvp(command[0], command)
+        return
+    # pi-kb parses this exactly like the arguments of its /kb command.
+    autoload = [args.name]
+    if args.store:
+        autoload += ["--store", args.store]
+    if args.file:
+        autoload += ["--file", Path(args.file).stem]
+    env = dict(os.environ, PI_KB_AUTOLOAD=" ".join(autoload))
+    os.chdir(Path(args.workspace).expanduser().resolve())
+    print(f"Pi を起動し、KB「{args.name}」を最初のセッションへ挿入します（pi-kb拡張が必要）", file=sys.stderr, flush=True)
+    os.execvpe(command[0], command, env)
+
+
 def main(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
     management = {"register", "create", "dev-init", "store", "list", "publish", "publish-paper", "codex", "claude", "decrypt",
@@ -488,6 +513,8 @@ def main(argv=None):
         if args.remote:
             raise SystemExit(code)
         return code
+    if boundary is not None and argv[0] not in management and argv[boundary] == "pi":
+        return launch_pi(argv[:boundary], argv[boundary + 1:])
     if boundary is not None and argv[0] not in management and argv[boundary] == "claude":
         from kb_claude import start
         parser = argparse.ArgumentParser(prog="kb NAME [KB options] claude [CLAUDE args...]", allow_abbrev=False)
@@ -507,7 +534,7 @@ def main(argv=None):
             from kb_claude_remote import start_remote
             raise SystemExit(start_remote(args, store.read_config()))
         return start(args, store.read_config())
-    parser = argparse.ArgumentParser(prog="kb", epilog="起動: kb NAME [KB options] codex|claude [client args...] / "
+    parser = argparse.ArgumentParser(prog="kb", epilog="起動: kb NAME [KB options] codex|claude|pi [client args...] / "
                                      "--remote の再開・フォーク: kb --remote codex resume|fork [ID] | "
                                      "kb --remote claude --resume ID [--fork-session]")
     commands = parser.add_subparsers(dest="command", required=True)
