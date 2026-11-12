@@ -1,40 +1,10 @@
 """Start a local Claude Code session with a decrypted KB and dev.txt."""
-from functools import lru_cache
 import json
 import os
 from pathlib import Path
-import subprocess
-import uuid
 
 import kb_store as store
 import kb_developer
-
-
-MAX_INLINE_CONTEXT = 500_000
-SNAPSHOT_OPTION = "--system-prompt-snapshot"
-
-
-@lru_cache(maxsize=1)
-def _supports_snapshot_option():
-    try:
-        result = subprocess.run(["claude", "--help"], stdin=subprocess.DEVNULL, capture_output=True,
-                                text=True, timeout=15)
-    except (OSError, subprocess.SubprocessError):
-        return False
-    return SNAPSHOT_OPTION in result.stdout
-
-
-def fresh_system_prompt(claude_args):
-    """Options that make a resumed conversation see this launch's appended prompt.
-
-    Claude Code records the system prompt on a conversation's first request and
-    sends that record on every resume, ignoring a different --append-system-prompt,
-    unless the snapshot is turned off for this process.
-    """
-    options = claude_args[:claude_args.index("--")] if "--" in claude_args else claude_args
-    if any(token == SNAPSHOT_OPTION or token.startswith(SNAPSHOT_OPTION + "=") for token in options):
-        return []
-    return [SNAPSHOT_OPTION, "off"] if _supports_snapshot_option() else []
 
 
 def _decrypt_files(loaded, name, filename):
@@ -121,40 +91,51 @@ def start(args, config):
     loaded = store.find_kb(config, args.name, args.store, filename=args.file)
     loaded = {**loaded, "developer_text": kb_developer.append_text(loaded.get("developer_text"), additions)}
     context = build_context(loaded, args.name, args.file)
-    session_id = str(uuid.uuid4())
-    if len(context.encode("utf-8")) <= MAX_INLINE_CONTEXT:
-        prompt = (
-            "The following is the user's portable KB context. Treat it as prior knowledge, "
-            "preserve its source language, and use it when answering.\n\n" + context
-        )
-        context_path = None
-    else:
-        context_path = store.CACHE / "claude-sessions" / args.name / Path(args.file).stem / f"{session_id}.md"
-        context_path.parent.mkdir(parents=True, exist_ok=True)
-        context_path.write_text(context, encoding="utf-8")
-        context_path.chmod(0o600)
-        prompt = (
-            "The user's portable KB context is in this UTF-8 file. Read it before answering and "
-            f"treat it as prior knowledge: {context_path}"
-        )
     workspace = Path(args.workspace).expanduser().resolve()
-    from kb_resume import claude_fork, claude_resume_id
+    from kb_resume import claude_fork, claude_latest_session, claude_resume_id
+    from kb_claude_history import require_existing_seed, seed_new_session
+    child_env = dict(os.environ)
+    if child_env.get("CLAUDE_CONFIG_DIR"):
+        # Resolve before chdir: Claude and the seed writer must use the same
+        # directory even when the caller supplies a relative config path.
+        child_env["CLAUDE_CONFIG_DIR"] = str(Path(child_env["CLAUDE_CONFIG_DIR"]).expanduser().resolve())
+    options = args.claude_args[:args.claude_args.index("--")] if "--" in args.claude_args else args.claude_args
+    if "--no-session-persistence" in options:
+        raise ValueError("Local Claude KB history requires a persistent session; "
+                         "--no-session-persistence cannot be used safely")
     resuming, resumed_id = claude_resume_id(args.claude_args)
+    seed_path = None
     if resuming:
-        # Claude Code rejects --session-id together with --resume/--continue.
-        # The appended system prompt is per process, so passing it again is
-        # what re-attaches the KB to the resumed (or, with --fork-session,
-        # forked) conversation.
-        command = ["claude", "--append-system-prompt", prompt, *fresh_system_prompt(args.claude_args),
-                   *args.claude_args]
-        label = resumed_id or "resume"
+        native_args = list(args.claude_args)
+        if not resumed_id and any(flag in options for flag in ("--continue", "-c")):
+            # Resolve once, validate that exact transcript, then resume it
+            # explicitly so a newly modified session cannot change selection.
+            resumed_id = claude_latest_session(workspace, env=child_env)
+            if not resumed_id:
+                raise ValueError("No Claude session is available to continue")
+            for index, token in enumerate(native_args):
+                if token == "--":
+                    break
+                if token in ("--continue", "-c"):
+                    native_args[index:index + 1] = ["--resume", resumed_id]
+                    break
+        if not resumed_id:
+            raise ValueError("Use --resume with an explicit KB session UUID; named sessions "
+                             "cannot be verified safely without modifying an existing transcript")
+        require_existing_seed(workspace, resumed_id, context, env=child_env)
+        command = ["claude", *native_args]
+        label = resumed_id
         if claude_fork(args.claude_args):
             label = f"{resumed_id or '直近のセッション'} から新しいセッションを作成します (--fork-session)"
     else:
-        command = ["claude", "--session-id", session_id, "--append-system-prompt", prompt, *args.claude_args]
+        session_id, seed_path = seed_new_session(workspace, context, env=child_env)
+        command = ["claude", "--resume", session_id, *args.claude_args]
         label = session_id
     print(f"KB: {args.name}/{args.file} / Claude session: {label}", flush=True)
-    if context_path:
-        print(f"KB context file: {context_path}", flush=True)
-    os.chdir(workspace)
-    os.execvp(command[0], command)
+    try:
+        os.chdir(workspace)
+        os.execvpe(command[0], command, child_env)
+    except (OSError, ValueError):
+        if seed_path is not None:
+            seed_path.unlink(missing_ok=True)
+        raise

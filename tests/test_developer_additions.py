@@ -109,11 +109,12 @@ class DeveloperAdditionsTests(unittest.TestCase):
     def test_claude_local_and_remote_receive_same_notes(self):
         for remote in (False, True):
             with self.subTest(remote=remote), \
+                 mock.patch.dict("os.environ", {"CLAUDE_CONFIG_DIR": str(self.root / "claude")}), \
                  mock.patch.object(kb_cli.store, "read_config", return_value={}), \
                  mock.patch.object(kb_claude.store, "find_kb", return_value=self.loaded), \
                  mock.patch.object(kb_claude, "_decrypt_files", return_value=[("raw.txt", "知識")]), \
                  mock.patch.object(kb_claude.os, "chdir"), \
-                 mock.patch.object(kb_claude.os, "execvp", side_effect=SystemExit(0)) as execute, \
+                 mock.patch.object(kb_claude.os, "execvpe", side_effect=SystemExit(0)) as execute, \
                  mock.patch.object(kb_claude_remote.proxy, "write_binding"), \
                  mock.patch.object(kb_claude_remote.kb_resume, "run_claude", return_value=0) as run, \
                  contextlib.redirect_stdout(io.StringIO()), self.assertRaises(SystemExit):
@@ -123,7 +124,10 @@ class DeveloperAdditionsTests(unittest.TestCase):
                 context = run.call_args.args[1].block["text"]
             else:
                 command = execute.call_args.args[1]
-                context = command[command.index("--append-system-prompt") + 1]
+                self.assertEqual(command[1], "--resume")
+                transcript = next((self.root / "claude" / "projects").rglob(f"{command[2]}.jsonl"))
+                import json
+                context = json.loads(transcript.read_text())["message"]["content"]
             self.assertIn("知識", context)
             self.assertIn("既存の案内\n\n最初\n\n決定と理由\n原文を保持", context)
             self.assertEqual(self.loaded["developer_text"], "既存の案内")

@@ -149,9 +149,12 @@ KBを挿入したセッションでは、Piの下部ステータスに `📚 KB:
 
 ## Claude Codeで復号済みKBを開く
 
-復号済みのKBをClaude Codeへ渡す場合は、`decrypt/<ファイル名>/` 配下の選択済み `raw.txt`
-とその後ろに保存先の `dev.txt` を置いたものを初期システムコンテキストにして、
-新しいローカルClaudeセッションを起動します。RRエンドポイントは使用しません。
+復号済みのKBをClaude Codeへ渡す場合は、`decrypt/<ファイル名>/` 配下の選択済み本文
+とその後ろに保存先の `dev.txt` を、過去の会話要約と同じ形式のuserメッセージとして
+新しいローカルClaudeセッションの履歴へ入れます。system promptや通信プロキシ、
+起動後のファイル読み込み指示は使わず、RRエンドポイントも使用しません。
+KB本文はClaudeのローカルセッション履歴に平文で保存されます。履歴ファイルは作成時に
+`0600`ですが、バックアップや他のツールによる取り扱いにも注意してください。
 
 ```bash
 kb octane claude --model sonnet
@@ -161,16 +164,17 @@ kb octane --file v1.00 claude --permission-mode bypassPermissions
 `decrypt` の成果物がない場合は、先に `kb decrypt octane` を実行してください。
 再作成を選んだ場合は同じファイル名を更新します。
 
-再開・フォークも kb 経由で行います。`--append-system-prompt` はプロセスごとの指定なので、
-素の `claude --resume ID` では会話は戻っても KB は付きません。Claude Code は会話の最初の要求の
-system prompt を記録して再開時にもそれを送るため、kb は再開時に（対応する Claude Code なら）
-`--system-prompt-snapshot off` も付けます（自分で指定した場合はそのまま）。`--session-id` は付けません。
+再開・フォークもkb経由で行います。既存履歴を変更せず確認するため、現状は**明示UUIDを持ち、
+同じKBが会話の有効な履歴に残っているセッション**だけを再開します。以前の形式、更新されたKB、
+`/compact`後や名前指定は自動変換せず、元の会話を変更せずにエラーになります。
+新しいKBセッションを開始してください。`--no-session-persistence`はこの方式では使えません。
+通常の履歴と同様、実行中にClaudeが会話をcompactした後にはKB全文が保持される保証はありません。
+`--remote`とは異なり、各リクエストへの再挿入は行いません。
 
 ```bash
-kb octane claude --resume <セッションID>   # KB を付け直して再開
-kb octane claude --continue
+kb octane claude --resume <セッションID>   # 同じKBが履歴に残る場合に再開
+kb octane claude --continue                 # 最新セッションが同じKBを保持する場合のみ
 kb octane claude --resume <セッションID> --fork-session   # 新しいセッションIDにフォーク
-kb octane claude --continue --fork-session
 ```
 
 `--fork-session` では Claude Code が新しいセッションIDを作り、元のセッションは変わりません。
