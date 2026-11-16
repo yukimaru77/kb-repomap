@@ -3,7 +3,9 @@ from functools import lru_cache
 import json
 import os
 from pathlib import Path
+import signal
 import subprocess
+import time
 import uuid
 
 import kb_store as store
@@ -12,6 +14,9 @@ import kb_developer
 
 MAX_INLINE_CONTEXT = 500_000
 SNAPSHOT_OPTION = "--system-prompt-snapshot"
+SYSTEM_PROMPT_FILE_OPTION = "--append-system-prompt-file"
+SYSTEM_PROMPT_PREAMBLE = ("The following is the user's portable KB context. Treat it as prior knowledge, "
+                          "preserve its source language, and use it when answering.\n\n")
 
 
 @lru_cache(maxsize=1)
@@ -22,6 +27,33 @@ def _supports_snapshot_option():
     except (OSError, subprocess.SubprocessError):
         return False
     return SNAPSHOT_OPTION in result.stdout
+
+
+@lru_cache(maxsize=1)
+def _supports_system_prompt_file_option():
+    """Probe that the CLI accepts this option and still rejects unknown options."""
+    try:
+        accepted = subprocess.run(
+            ["claude", SYSTEM_PROMPT_FILE_OPTION, os.devnull, "--help"],
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+        rejected = subprocess.run(
+            ["claude", SYSTEM_PROMPT_FILE_OPTION, os.devnull,
+             "--permission-mode", "__kb_invalid_permission_probe__"],
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False
+    invalid = "__kb_invalid_permission_probe__"
+    diagnostics = f"{rejected.stdout}\n{rejected.stderr}"
+    return (accepted.returncode == 0 and rejected.returncode != 0
+            and invalid in diagnostics and SYSTEM_PROMPT_FILE_OPTION not in diagnostics)
 
 
 def fresh_system_prompt(claude_args):
@@ -123,38 +155,137 @@ def start(args, config):
     context = build_context(loaded, args.name, args.file)
     session_id = str(uuid.uuid4())
     if len(context.encode("utf-8")) <= MAX_INLINE_CONTEXT:
-        prompt = (
-            "The following is the user's portable KB context. Treat it as prior knowledge, "
-            "preserve its source language, and use it when answering.\n\n" + context
-        )
+        prompt = SYSTEM_PROMPT_PREAMBLE + context
         context_path = None
+        prompt_option = "--append-system-prompt"
     else:
-        context_path = store.CACHE / "claude-sessions" / args.name / Path(args.file).stem / f"{session_id}.md"
-        context_path.parent.mkdir(parents=True, exist_ok=True)
-        context_path.write_text(context, encoding="utf-8")
-        context_path.chmod(0o600)
-        prompt = (
-            "The user's portable KB context is in this UTF-8 file. Read it before answering and "
-            f"treat it as prior knowledge: {context_path}"
-        )
-    workspace = Path(args.workspace).expanduser().resolve()
-    from kb_resume import claude_fork, claude_resume_id
-    resuming, resumed_id = claude_resume_id(args.claude_args)
-    if resuming:
-        # Claude Code rejects --session-id together with --resume/--continue.
-        # The appended system prompt is per process, so passing it again is
-        # what re-attaches the KB to the resumed (or, with --fork-session,
-        # forked) conversation.
-        command = ["claude", "--append-system-prompt", prompt, *fresh_system_prompt(args.claude_args),
-                   *args.claude_args]
-        label = resumed_id or "resume"
-        if claude_fork(args.claude_args):
-            label = f"{resumed_id or '直近のセッション'} から新しいセッションを作成します (--fork-session)"
-    else:
-        command = ["claude", "--session-id", session_id, "--append-system-prompt", prompt, *args.claude_args]
-        label = session_id
-    print(f"KB: {args.name}/{args.file} / Claude session: {label}", flush=True)
-    if context_path:
-        print(f"KB context file: {context_path}", flush=True)
-    os.chdir(workspace)
-    os.execvp(command[0], command)
+        if not _supports_system_prompt_file_option():
+            raise RuntimeError(
+                "Claude Code does not support --append-system-prompt-file; "
+                "refusing to start because large KB context would otherwise be only a partial file read"
+            )
+        context_path = (store.CACHE.absolute() / "claude-sessions" / args.name
+                        / Path(args.file).stem / f"{session_id}.md")
+        _make_private_parent(context_path.parent)
+        try:
+            fd = os.open(context_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+            try:
+                with os.fdopen(fd, "w", encoding="utf-8") as output:
+                    fd = None
+                    output.write(SYSTEM_PROMPT_PREAMBLE + context)
+            finally:
+                if fd is not None:
+                    os.close(fd)
+        except BaseException:
+            context_path.unlink(missing_ok=True)
+            raise
+        prompt = str(context_path)
+        prompt_option = SYSTEM_PROMPT_FILE_OPTION
+    try:
+        workspace = Path(args.workspace).expanduser().resolve()
+        from kb_resume import claude_fork, claude_resume_id
+        resuming, resumed_id = claude_resume_id(args.claude_args)
+        if resuming:
+            # Claude Code rejects --session-id with --resume/--continue.
+            # Passing the appended prompt again re-attaches the KB.
+            command = ["claude", prompt_option, prompt, *fresh_system_prompt(args.claude_args),
+                       *args.claude_args]
+            label = resumed_id or "resume"
+            if claude_fork(args.claude_args):
+                label = f"{resumed_id or '直近のセッション'} から新しいセッションを作成します (--fork-session)"
+        else:
+            command = ["claude", "--session-id", session_id, prompt_option, prompt, *args.claude_args]
+            label = session_id
+        print(f"KB: {args.name}/{args.file} / Claude session: {label}", flush=True)
+        if context_path:
+            print(f"KB context file: {context_path}", flush=True)
+        try:
+            os.chdir(workspace)
+            if context_path is None:
+                os.execvp(command[0], command)
+            raise SystemExit(_run_with_context_file(command, context_path))
+        finally:
+            if context_path is not None:
+                context_path.unlink(missing_ok=True)
+    except BaseException:
+        if context_path is not None:
+            context_path.unlink(missing_ok=True)
+        raise
+
+
+def _make_private_parent(path):
+    """Create cache directories without following a symlink in the cache path."""
+    current = store.CACHE.absolute()
+    if current.is_symlink():
+        raise RuntimeError(f"KB context directory is a symlink: {current}")
+    if not current.exists():
+        current.mkdir(parents=True, mode=0o700)
+    elif not current.is_dir():
+        raise RuntimeError(f"KB context cache is not a directory: {current}")
+    os.chmod(current, 0o700)
+    absolute_path = path.absolute()
+    try:
+        parts = absolute_path.relative_to(current).parts
+    except ValueError as error:
+        raise RuntimeError(f"KB context path escapes cache: {absolute_path}") from error
+    if ".." in parts:
+        raise RuntimeError(f"KB context path escapes cache: {absolute_path}")
+    for part in parts:
+        if current.is_symlink():
+            raise RuntimeError(f"KB context directory is a symlink: {current}")
+        current /= part
+        if current.is_symlink():
+            raise RuntimeError(f"KB context directory is a symlink: {current}")
+        if current.exists():
+            if not current.is_dir():
+                raise RuntimeError(f"KB context parent is not a directory: {current}")
+            os.chmod(current, 0o700)
+        else:
+            current.mkdir(mode=0o700)
+
+
+def _run_with_context_file(command, context_path):
+    """Keep a private prompt file until Claude exits, then remove it.
+
+    SIGKILL, power loss, and an external filesystem failure cannot be cleaned up
+    by a process that is no longer running; normal exit and handled termination
+    are covered here.
+    """
+    child = None
+    interrupted = None
+    previous = {}
+
+    def forward(signum, _frame):
+        nonlocal interrupted
+        interrupted = interrupted or signum
+        if child is not None:
+            try:
+                child.send_signal(signum)
+            except ProcessLookupError:
+                pass
+
+    try:
+        for signum in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
+            previous[signum] = signal.signal(signum, forward)
+        child = subprocess.Popen(command)
+        if interrupted is not None:
+            forward(interrupted, None)
+        deadline = None
+        while True:
+            try:
+                code = child.wait(timeout=1)
+                break
+            except subprocess.TimeoutExpired:
+                if interrupted is not None:
+                    deadline = deadline or time.monotonic() + 5
+                    if time.monotonic() >= deadline:
+                        child.kill()
+                        code = child.wait(timeout=1)
+                        break
+        if interrupted is not None:
+            return 128 + interrupted
+        return 128 + -code if code < 0 else code
+    finally:
+        for signum, handler in previous.items():
+            signal.signal(signum, handler)
+        context_path.unlink(missing_ok=True)
